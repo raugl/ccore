@@ -40,8 +40,8 @@ void panic_impl() {
 
 void panic_log_impl(const char* fmt, ...) {
     if (isatty(fileno(stderr))) {
-        fputs("\x1b[35m", stderr);
-        fputs("fatal", stderr);
+        fputs("\x1b[31m", stderr);
+        fputs("[fatal]", stderr);
         fputs("\x1b[0m: ", stderr);
     } else {
         fputs("fatal: ", stderr);
@@ -57,8 +57,8 @@ void panic_log_impl(const char* fmt, ...) {
 }
 
 void log_impl(log_level_t level, const char* fmt, ...) {
-    static const char* labels[] = {"[trace]", "[debug]", "[ info]", "[ warn]", "[error]"};
-    static const char* colors[] = {"\x1b[1;37m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m"};
+    static const char* labels[] = {"[trace]", "[debug]", "[info ]", "[warn ]", "[error]"};
+    static const char* colors[] = {"\x1b[1;90m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m"};
 
     if (isatty(fileno(stderr))) {
         fputs(colors[level], stderr);

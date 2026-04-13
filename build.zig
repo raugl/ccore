@@ -13,11 +13,12 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    b.installArtifact(exe);
-
     exe.root_module.addCSourceFiles(.{
-        .files = &.{ "src/freelist_allocator.c" },
+        .files = &.{
+            "src/allocator.c", "src/common.c", "src/main.c",
+        },
     });
+    b.installArtifact(exe);
 
     const cc_gen_step = b.step("compile-commands", "Generate 'compile_commands.json'");
     const cc_gen_cmd = zcc.createStep(b, target, &.{exe});
