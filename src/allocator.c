@@ -1,11 +1,29 @@
 #include "allocator.h"
+#include <stdlib.h>
+#include "math.h"
+
+void* alloc_alloc_raw(allocator_t* self, usize size) {
+    void* mem = malloc(size);
+    if (mem == NULL) panic("malloc out of memory");
+    return mem;
+}
+
+void* alloc_realloc_raw(allocator_t* self, void* ptr, usize old_size, usize new_size) {
+    void* mem = realloc(ptr, new_size);
+    if (mem == NULL) panic("realloc out of memory");
+    return mem;
+}
+
+void alloc_free_raw(allocator_t* self, void* ptr, usize size) {
+    free(ptr);
+}
 
 // =================================================================================================
 // Section: Arena Allocator
 // =================================================================================================
-arena_t arena_init_fixed(void* buffer, u32 size) {
+arena_t arena_init_fixed(void* buffer, usize size) {
     assert(buffer != NULL);
-    // assert(false); // TODO: alignment of max_align_t
+    assert((uintptr_t)buffer % sizeof(max_align_t) == 0);
 
     return (arena_t) {
         .ptr = buffer,
@@ -14,10 +32,9 @@ arena_t arena_init_fixed(void* buffer, u32 size) {
     };
 }
 
-arena_t arena_init_alloc(allocator_t* alloc, u32 size) {
+arena_t arena_init_alloc(allocator_t* alloc, usize size) {
     assert(alloc != NULL);
 
-    // TODO: ptr alignment of max_align_t
     u8* ptr = alloc_alloc(alloc, u8, size);
     return (arena_t) {
         .ptr = ptr,
@@ -28,7 +45,7 @@ arena_t arena_init_alloc(allocator_t* alloc, u32 size) {
 }
 
 // TODO: Allocate virtual memory, respect max_align_t
-arena_t arena_init_virtual(u32 size) {
+arena_t arena_init_virtual(usize size) {
     return (arena_t) {
         .ptr = NULL,
         .capacity = size,
@@ -58,7 +75,7 @@ void arena_clear(arena_t* self) {
     self->index = 0;
 }
 
-void* arena_alloc_impl(arena_t* self, u32 size) {
+void* arena_alloc_raw(arena_t* self, usize size) {
     assert(self != NULL);
     assert(self->index + size <= self->capacity);
 
@@ -68,7 +85,8 @@ void* arena_alloc_impl(arena_t* self, u32 size) {
     return start;
 }
 
-void* arena_realloc_impl(arena_t* self, void* ptr, u32 old_size, u32 new_size) {
+// TODO: return null if grow in place fails
+void* arena_realloc_raw(arena_t* self, void* ptr, usize old_size, usize new_size) {
     u8* start = ptr;
     assert(self != NULL);
     assert(self->ptr <= start);
@@ -79,7 +97,10 @@ void* arena_realloc_impl(arena_t* self, void* ptr, u32 old_size, u32 new_size) {
         assert(self->index <= self->capacity);
         return start;
     }
-    start = arena_alloc_impl(self, new_size);
+    panic("arena should only try to grow in place, not memcpy into a new allocation");
+    return NULL;
+
+    start = arena_alloc_raw(self, new_size);
     memcpy(start, ptr, old_size);
     return start;
 }

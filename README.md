@@ -9,13 +9,13 @@ typedef enum {
     ERR_NONE = 0,
     ERR_GENERAL,
     ERR_OUT_OF_MEMORY,
-} err_code; // Global error set
+} error_t; // Global error set
 
-err_code my_func(u32 len, OUT array_u32_t* nums) {
-    err_code err = ERR_NONE;                // Always start by hoping for the best
+error_t my_func(usize len, OUT array_u32_t* nums) {
+    error_t err = ERR_NONE;                // Always start by hoping for the best
     *nums = (array_u32_t) {};
 
-    for (u32 i = 0; i < len; ++i) {
+    for (usize i = 0; i < len; ++i) {
         if (array_u32_push(nums, i << 5)) {
             err = ERR_OUT_OF_MEMORY;
             goto exit;

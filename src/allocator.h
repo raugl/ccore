@@ -1,15 +1,20 @@
 #pragma once
 #include "common.h"
 
-typedef void allocator_t;
+typedef u32 allocator_t;
 
-// FIXME: Should assert on failure
-#define alloc_alloc(alloc, value_t, len) malloc(sizeof(value_t) * (len))
+// TODO: Remove this, its annoying. just compute the sizeof myself
+#define alloc_alloc(alloc, T, len) alloc_alloc_raw((alloc), sizeof(T) * (len))
 
-// FIXME: Should assert on failure
-#define alloc_realloc(alloc, slice, len) realloc((slice).ptr, sizeof((slice).ptr[0]) * (len))
+#define alloc_realloc(alloc, slice, len)                                                           \
+    alloc_realloc_raw((alloc), (slice).ptr, (slice).capacity, sizeof((slice).ptr[0]) * len)
 
-#define alloc_free(alloc, slice) free((slice).ptr)
+#define alloc_free(alloc, slice)                                                                   \
+    alloc_free_raw((alloc), (slice).ptr, sizeof((slice).ptr[0]) * (slice).capacity)
+
+void* alloc_alloc_raw(allocator_t* self, usize size);
+void* alloc_realloc_raw(allocator_t* self, void* ptr, usize old_size, usize new_size);
+void alloc_free_raw(allocator_t* self, void* ptr, usize size);
 
 typedef enum {
     ARENA_BACKING_FIXED,
@@ -24,24 +29,24 @@ typedef struct {
     arena_backing_kind_t kind;
 } arena_t;
 
-#define arena_alloc(arena, value_t, size) arena_alloc_impl((arena), sizeof(value_t) * (size))
+#define arena_alloc(arena, T, len) arena_alloc_raw((arena), sizeof(T) * (len))
 
-#define arena_realloc(arena, slice, size)                                                          \
-    arena_realloc_impl(                                                                            \
+#define arena_realloc(arena, slice, len)                                                           \
+    arena_realloc_raw(                                                                             \
         (arena),                                                                                   \
         (slice).ptr,                                                                               \
-        (slice).len * sizeof((slice).ptr[0]),                                                      \
-        sizeof((slice).ptr[0]) * (size)                                                            \
+        (slice).capacity * sizeof((slice).ptr[0]),                                                 \
+        sizeof((slice).ptr[0]) * (len)                                                             \
     )
 
 // TODO: Introduce "checkpoints" and being able to reset the arena to a previous index
-arena_t arena_init_fixed(void* buffer, u32 size);
-arena_t arena_init_alloc(allocator_t* alloc, u32 size);
-arena_t arena_init_virtual(u32 size);
+arena_t arena_init_fixed(void* buffer, usize size);
+arena_t arena_init_alloc(allocator_t* alloc, usize size);
+arena_t arena_init_virtual(usize size);
 void arena_clear(arena_t* self);
 void arena_release(arena_t* self);
-void* arena_alloc_impl(arena_t* self, u32 size);
-void* arena_realloc_impl(arena_t* self, void* ptr, u32 old_size, u32 new_size);
+void* arena_alloc_raw(arena_t* self, usize size);
+void* arena_realloc_raw(arena_t* self, void* ptr, usize old_size, usize new_size);
 
 typedef enum {
     GROW_POLICY_FIXED = 0,

@@ -1,38 +1,50 @@
 #pragma once
 #include "common.h"
 
-#define SLICE_DECL(T, name)                                                                        \
+#define SLICE_RAW_DECL(T, name)                                                                    \
     typedef struct {                                                                               \
         T* ptr;                                                                                    \
-        u32 len;                                                                                   \
-    } slice_##name##_t;                                                                            \
+        usize len;                                                                                 \
+    } name##_t;                                                                                    \
                                                                                                    \
-    slice_##name##_t slice_##name##_slice(slice_##name##_t self, u32 idx, u32 len);
+    name##_t name##_slice(name##_t self, usize idx, usize len);
 
-SLICE_DECL(u8, u8);
-SLICE_DECL(u16, u16);
-SLICE_DECL(u32, u32);
-SLICE_DECL(u64, u64);
+#define SLICE_DECL(T) SLICE_RAW_DECL(T, slice_##T)
 
-SLICE_DECL(i8, i8);
-SLICE_DECL(i16, i16);
-SLICE_DECL(i32, i32);
-SLICE_DECL(i64, i64);
+SLICE_DECL(u8);
+SLICE_DECL(u16);
+SLICE_DECL(u32);
+SLICE_DECL(u64);
 
-SLICE_DECL(f32, f32);
-SLICE_DECL(f64, f64);
-SLICE_DECL(bool, bool);
+SLICE_DECL(i8);
+SLICE_DECL(i16);
+SLICE_DECL(i32);
+SLICE_DECL(i64);
+
+SLICE_DECL(f32);
+SLICE_DECL(f64);
+SLICE_DECL(bool);
+
+SLICE_RAW_DECL(const char, string);
+SLICE_RAW_DECL(void, slice_raw);
+
+#define cstr(string)                                                                               \
+    (string_t) {                                                                                   \
+        .ptr = (string), .len = strlen((string))                                                   \
+    }
 
 #ifdef GENERICS_IMPLEMENTATION
 
-#define SLICE_IMPL(T, name)                                                                        \
-    slice_##name##_t slice_##name##_slice(slice_##name##_t self, u32 idx, u32 len) {               \
+#define SLICE_RAW_IMPL(T, name)                                                                    \
+    name##_t name##_slice(name##_t self, usize idx, usize len) {                                   \
         assert(idx < self.len);                                                                    \
         assert(idx + len <= self.len);                                                             \
                                                                                                    \
-        return (slice_##name##_t) {                                                                \
+        return (name##_t) {                                                                        \
             .ptr = self.ptr + idx,                                                                 \
             .len = (len > 0) ? len : self.len,                                                     \
         };                                                                                         \
     }
+
+#define SLICE_IMPL(T) SLICE_RAW_IMPL(T, slice_##T)
 #endif
