@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
 
-#define SLICE_RAW_DECL(T, name)                                                                    \
+#define SLICE_DECL_RAW(T, name)                                                                    \
     typedef struct {                                                                               \
         T* ptr;                                                                                    \
         usize len;                                                                                 \
@@ -9,7 +9,7 @@
                                                                                                    \
     name##_t name##_slice(name##_t self, usize idx, usize len);
 
-#define SLICE_DECL(T) SLICE_RAW_DECL(T, slice_##T)
+#define SLICE_DECL(T) SLICE_DECL_RAW(T, slice_##T)
 
 SLICE_DECL(u8);
 SLICE_DECL(u16);
@@ -25,8 +25,8 @@ SLICE_DECL(f32);
 SLICE_DECL(f64);
 SLICE_DECL(bool);
 
-SLICE_RAW_DECL(const char, string);
-SLICE_RAW_DECL(void, slice_raw);
+SLICE_DECL_RAW(const char, string);
+SLICE_DECL_RAW(void, slice_raw);
 
 #define cstr(string)                                                                               \
     (string_t) {                                                                                   \
@@ -35,7 +35,7 @@ SLICE_RAW_DECL(void, slice_raw);
 
 #ifdef GENERICS_IMPLEMENTATION
 
-#define SLICE_RAW_IMPL(T, name)                                                                    \
+#define SLICE_IMPL_RAW(T, name)                                                                    \
     name##_t name##_slice(name##_t self, usize idx, usize len) {                                   \
         assert(idx < self.len);                                                                    \
         assert(idx + len <= self.len);                                                             \
@@ -46,5 +46,5 @@ SLICE_RAW_DECL(void, slice_raw);
         };                                                                                         \
     }
 
-#define SLICE_IMPL(T) SLICE_RAW_IMPL(T, slice_##T)
+#define SLICE_IMPL(T) SLICE_IMPL_RAW(T, slice_##T)
 #endif

@@ -4,8 +4,8 @@
 
 // TODO: Add rehash function, and maybe trigger it automatically when there are too many tombstones.
 // TODO: Probably add a clone function at some point.
-// TODO: Change it so functions return more information about potential error, especially allocation
-// one. Also change the allocators to not panic anymore on failure.
+// TODO: `get_or_put` returns an invalid entry structure, which is used to signify allocation
+// failure. That's pretty bad, maybe change to an out param.
 
 typedef u8 meta_t;
 
@@ -23,10 +23,10 @@ typedef struct {
     bool is_first;
 } map_iter_t;
 
-#define HASHMAP_RAW_DECL(K, V, name)                                                               \
+#define HASHMAP_DECL_RAW(K, V, name)                                                               \
     typedef struct {                                                                               \
-        meta_t* ptr;                                                                               \
-        grow_policy_t grow;                                                                        \
+        meta_t* ptr_;                                                                              \
+        grow_policy_t grow_;                                                                       \
         u32 len, capacity, available;                                                              \
     } name##_t;                                                                                    \
                                                                                                    \
@@ -35,16 +35,17 @@ typedef struct {
     name##_t name##_init_alloc(allocator_t* alloc, usize capacity);                                \
     void name##_release(name##_t* self);                                                           \
                                                                                                    \
+    bool name##_ensure_capacity(name##_t* self, usize new_capacity);                               \
     bool name##_contains(name##_t* self, K key);                                                   \
     NULLABLE V* name##_get(name##_t* self, K key);                                                 \
     map_entry_t name##_get_entry(name##_t* self, K key);                                           \
-    void name##_put(name##_t* self, K key, V value);                                               \
-    V name##_fetch_put(name##_t* self, K key, V value);                                            \
+    bool name##_put(name##_t* self, K key, V value);                                               \
+    bool name##_fetch_put(name##_t* self, K key, V value, V* out);                                 \
     map_entry_t name##_get_or_put(name##_t* self, K key);                                          \
-    void name##_remove(name##_t* self, K key);                                                     \
+    bool name##_remove(name##_t* self, K key);                                                     \
     map_iter_t name##_iter(name##_t self);
 
-#define HASHMAP_DECL(K, V) HASHMAP_RAW_DECL(K, V, map_##K##_##V)
+#define HASHMAP_DECL(K, V) HASHMAP_DECL_RAW(K, V, map_##K##_##V)
 
 #define HASHMAP_ARRAY(var, K, V, size)                                                             \
     alignas(max_align_t)                                                                           \
@@ -52,7 +53,7 @@ typedef struct {
 
 // Specialize here whichever hashmaps you always want available. Instantiation is also possible in a
 // single translation unit for more specialized types.
-HASHMAP_RAW_DECL(u32, u32, map_u32);
+HASHMAP_DECL_RAW(u32, u32, map_u32);
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "hash.h"
@@ -70,23 +71,23 @@ HASHMAP_RAW_DECL(u32, u32, map_u32);
 #define METADATA_FINGERPRINT_MASK 0x7f
 
 #define map_keys(map, K)                                                                           \
-    (K*)align_forward_ptr((map).ptr + sizeof(meta_t) * (map).capacity, alignof(K))
+    (K*)align_forward_ptr((map).ptr_ + sizeof(meta_t) * (map).capacity, alignof(K))
 
 #define map_values(map, K, V) (V*)align_forward_ptr(map_keys((map), K) + (map).capacity, alignof(V))
 
-static inline bool is_used(u8 meta) {
+static bool is_used(u8 meta) {
     return (meta & METADATA_USED_MASK) != 0;
 }
 
-static inline u8 set_fingerprint(u8 fingerprint) {
+static u8 set_fingerprint(u8 fingerprint) {
     return fingerprint | METADATA_USED_MASK;
 }
 
-static inline u8 get_fingerprint(u8 meta) {
+static u8 get_fingerprint(u8 meta) {
     return meta & METADATA_FINGERPRINT_MASK;
 }
 
-static inline u8 take_fingerprint(u64 hash) {
+static u8 take_fingerprint(u64 hash) {
     return hash >> 59;
 }
 
@@ -101,34 +102,35 @@ static usize buffer_size(usize capacity, usize key_sizeof, usize value_sizeof) {
     return size;
 }
 
-static u8* alloc_buffer(grow_policy_t grow, usize capacity, usize key_sizeof, usize value_sizeof) {
+static u8* alloc_buffer(grow_policy_t grow_, usize capacity, usize key_sizeof, usize value_sizeof) {
     usize size = buffer_size(capacity, key_sizeof, value_sizeof);
     if (size == 0) return NULL;
     u8* ptr;
 
-    switch (grow.kind) {
+    switch (grow_.kind) {
     case GROW_POLICY_ARENA:
-        ptr = arena_alloc_raw(grow.arena, size * sizeof(u8));
+        ptr = arena_alloc(grow_.arena, size * sizeof(u8));
         break;
     case GROW_POLICY_ALLOC:
-        ptr = alloc_alloc_raw(grow.alloc, size * sizeof(u8));
+        ptr = alloc_alloc(grow_.alloc, size * sizeof(u8));
         break;
     case GROW_POLICY_FIXED:
         panic("fixed buffer hashmap cannot allocate new buffer");
         break;
     }
+    // FIXME: potentially writing to NULL
     memset(ptr, METADATA_FREE, capacity * sizeof(meta_t));
     return ptr;
 }
 
-static inline u64 hash_slice(const void* key, usize size) {
+static u64 hash_slice(const void* key, usize size) {
     const slice_raw_t* slice = key;
     (void)size;
 
     return hash_bytes(slice->ptr, slice->len);
 }
 
-static inline bool equal_slice(const void* a, const void* b, usize size) {
+static bool equal_slice(const void* a, const void* b, usize size) {
     const slice_raw_t *slice_a = a, *slice_b = b;
     (void)size;
 
@@ -137,7 +139,7 @@ static inline bool equal_slice(const void* a, const void* b, usize size) {
     return memcmp(slice_a->ptr, slice_b->ptr, slice_a->len) == 0;
 }
 
-static inline bool equal_bytes(const void* a, const void* b, usize size) {
+static bool equal_bytes(const void* a, const void* b, usize size) {
     if (a == b) return true;
     return memcmp(a, b, size) == 0;
 }
@@ -167,49 +169,55 @@ bool map_iter_next(map_iter_t* self) {
     );
 }
 
-#define HASHMAP_RAW_IMPL(K, V, name, hash_fn, equal_fn)                                            \
+#define HASHMAP_IMPL_RAW(K, V, name, hash_fn, equal_fn)                                            \
     name##_t name##_init_fixed(void* buffer, usize capacity) {                                     \
         assert(buffer != NULL);                                                                    \
         assert(is_pow2(capacity));                                                                 \
         assert(is_aligned_ptr(buffer));                                                            \
                                                                                                    \
         return (name##_t) {                                                                        \
-            .ptr = buffer,                                                                         \
+            .ptr_ = buffer,                                                                        \
             .capacity = capacity,                                                                  \
             .available = (capacity * LOAD_FACTOR / 100),                                           \
-            .grow.kind = GROW_POLICY_FIXED,                                                        \
+            .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
     name##_t name##_init_arena(arena_t* arena, usize capacity) {                                   \
         assert(arena != NULL);                                                                     \
-        assert(is_pow2(capacity));                                                                 \
+        if (capacity > 0) {                                                                        \
+            capacity = next_pow2_u64(max_usize(MIN_CAPACITY, capacity));                           \
+        }                                                                                          \
+        usize size = buffer_size(capacity, sizeof(K), sizeof(V));                                  \
+        u8* ptr_ = arena_alloc(arena, size * sizeof(u8));                                          \
+        assert(ptr_ != NULL);                                                                      \
+        memset(ptr_, METADATA_FREE, capacity * sizeof(meta_t));                                    \
                                                                                                    \
-        grow_policy_t grow = {                                                                     \
-            .arena = arena,                                                                        \
-            .kind = GROW_POLICY_ARENA,                                                             \
-        };                                                                                         \
         return (name##_t) {                                                                        \
-            .ptr = alloc_buffer(grow, capacity, sizeof(K), sizeof(V)),                             \
-            .grow = grow,                                                                          \
+            .ptr_ = ptr_,                                                                          \
             .capacity = capacity,                                                                  \
             .available = (capacity * LOAD_FACTOR / 100),                                           \
+            .grow_.arena = arena,                                                                  \
+            .grow_.kind = GROW_POLICY_ARENA,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
     name##_t name##_init_alloc(allocator_t* alloc, usize capacity) {                               \
         assert(alloc != NULL);                                                                     \
-        assert(is_pow2(capacity));                                                                 \
+        if (capacity > 0) {                                                                        \
+            capacity = next_pow2_u64(max_usize(MIN_CAPACITY, capacity));                           \
+        }                                                                                          \
+        usize size = buffer_size(capacity, sizeof(K), sizeof(V));                                  \
+        u8* ptr_ = alloc_alloc(alloc, size * sizeof(u8));                                          \
+        assert(ptr_ != NULL);                                                                      \
+        memset(ptr_, METADATA_FREE, capacity * sizeof(meta_t));                                    \
                                                                                                    \
-        grow_policy_t grow = {                                                                     \
-            .alloc = alloc,                                                                        \
-            .kind = GROW_POLICY_ALLOC,                                                             \
-        };                                                                                         \
         return (name##_t) {                                                                        \
-            .ptr = alloc_buffer(grow, capacity, sizeof(K), sizeof(V)),                             \
-            .grow = grow,                                                                          \
+            .ptr_ = ptr_,                                                                          \
             .capacity = capacity,                                                                  \
             .available = (capacity * LOAD_FACTOR / 100),                                           \
+            .grow_.alloc = alloc,                                                                  \
+            .grow_.kind = GROW_POLICY_ALLOC,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
@@ -217,25 +225,85 @@ bool map_iter_next(map_iter_t* self) {
         assert(self != NULL);                                                                      \
                                                                                                    \
         usize size = buffer_size(self->capacity, sizeof(K), sizeof(V));                            \
-        memset(self->ptr, 0, size);                                                                \
+        memset(self->ptr_, 0xDE, size);                                                            \
                                                                                                    \
-        switch (self->grow.kind) {                                                                 \
+        switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
             log_error("attempted to release an arena allocated hashmap");                          \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            alloc_free_raw(self->grow.alloc, self->ptr, size);                                     \
+            alloc_free_raw(self->grow_.alloc, self->ptr_, size);                                   \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
             log_error("attempted to release a fixed buffer hashmap");                              \
             break;                                                                                 \
         }                                                                                          \
-        memset(self, 0, sizeof(name##_t));                                                         \
+        memset(self, 0xDE, sizeof(name##_t));                                                      \
+    }                                                                                              \
+                                                                                                   \
+    static void name##_put_assume_capacity_no_clobber(name##_t* self, K key, V value) {            \
+        const u64 hash = hash_fn(&key, sizeof(K));                                                 \
+        const u32 mask = self->capacity - 1;                                                       \
+        const u8 fingerprint = take_fingerprint(hash);                                             \
+                                                                                                   \
+        u32 idx = hash & mask;                                                                     \
+        meta_t* meta = self->ptr_ + idx;                                                           \
+                                                                                                   \
+        while (is_used(*meta)) {                                                                   \
+            idx = (idx + 1) & mask;                                                                \
+            meta = self->ptr_ + idx;                                                               \
+        }                                                                                          \
+                                                                                                   \
+        K* keys = map_keys(*self, K);                                                              \
+        V* values = map_values(*self, K, V);                                                       \
+        assert(self->available > 0);                                                               \
+                                                                                                   \
+        *meta = set_fingerprint(fingerprint);                                                      \
+        self->available--;                                                                         \
+        self->len++;                                                                               \
+                                                                                                   \
+        keys[idx] = key;                                                                           \
+        values[idx] = value;                                                                       \
+    }                                                                                              \
+                                                                                                   \
+    bool name##_ensure_capacity(name##_t* self, usize new_capacity) {                              \
+        assert(self != NULL);                                                                      \
+        if (self->capacity > new_capacity) return true;                                            \
+        new_capacity = next_pow2_u64(max_usize(MIN_CAPACITY, new_capacity));                       \
+        name##_t new_map;                                                                          \
+                                                                                                   \
+        switch (self->grow_.kind) {                                                                \
+        case GROW_POLICY_ARENA:                                                                    \
+            /* TODO: Return `false` on allocation failure */                                       \
+            new_map = name##_init_arena(self->grow_.arena, new_capacity);                          \
+            break;                                                                                 \
+        case GROW_POLICY_ALLOC:                                                                    \
+            /* TODO: Return `false` on allocation failure */                                       \
+            new_map = name##_init_alloc(self->grow_.alloc, new_capacity);                          \
+            break;                                                                                 \
+        case GROW_POLICY_FIXED:                                                                    \
+            panic("fixed buffer hashmap cannot allocate new buffer");                              \
+            break;                                                                                 \
+        }                                                                                          \
+        if (self->len > 0) {                                                                       \
+            K* keys = map_keys(*self, K);                                                          \
+            V* values = map_values(*self, K, V);                                                   \
+            meta_t* metas = self->ptr_;                                                            \
+                                                                                                   \
+            for (usize i = 0; i < self->capacity; i++) {                                           \
+                if (!is_used(metas[i])) continue;                                                  \
+                name##_put_assume_capacity_no_clobber(&new_map, keys[i], values[i]);               \
+                if (self->len == new_map.len) break;                                               \
+            }                                                                                      \
+        }                                                                                          \
+        self->len = 0;                                                                             \
+        name##_release(self);                                                                      \
+        *self = new_map;                                                                           \
+        return true;                                                                               \
     }                                                                                              \
                                                                                                    \
     static usize name##_get_idx(name##_t* self, K key) {                                           \
         assert(self != NULL);                                                                      \
-                                                                                                   \
         K* keys = map_keys(*self, K);                                                              \
                                                                                                    \
         const u64 hash = hash_fn(&key, sizeof(K));                                                 \
@@ -244,7 +312,7 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                    \
         u32 idx = hash & mask;                                                                     \
         u32 limit = self->capacity;                                                                \
-        meta_t* meta = self->ptr + idx;                                                            \
+        meta_t* meta = self->ptr_ + idx;                                                           \
                                                                                                    \
         while (*meta != METADATA_FREE && limit > 0) {                                              \
             if (is_used(*meta) && get_fingerprint(*meta) == fingerprint) {                         \
@@ -254,7 +322,7 @@ bool map_iter_next(map_iter_t* self) {
             }                                                                                      \
             limit--;                                                                               \
             idx = (idx + 1) & mask;                                                                \
-            meta = self->ptr + idx;                                                                \
+            meta = self->ptr_ + idx;                                                               \
         }                                                                                          \
         return INVALID_IDX;                                                                        \
     }                                                                                              \
@@ -276,98 +344,49 @@ bool map_iter_next(map_iter_t* self) {
                 .existed = true,                                                                   \
             };                                                                                     \
         }                                                                                          \
-        return (map_entry_t) {.existed = false};                                                   \
+        return (map_entry_t) {};                                                                   \
     }                                                                                              \
                                                                                                    \
     bool name##_contains(name##_t* self, K key) {                                                  \
         return name##_get_idx(self, key) != INVALID_IDX;                                           \
     }                                                                                              \
                                                                                                    \
-    void name##_remove(name##_t* self, K key) {                                                    \
+    bool name##_remove(name##_t* self, K key) {                                                    \
         usize idx = name##_get_idx(self, key);                                                     \
-        if (idx == INVALID_IDX) log_error("attempted to remove a non-existent key");               \
+        if (idx == INVALID_IDX) return false;                                                      \
                                                                                                    \
         K* keys = map_keys(*self, K);                                                              \
         V* values = map_values(*self, K, V);                                                       \
-        memset(keys + idx, 0, sizeof(K));                                                          \
-        memset(values + idx, 0, sizeof(V));                                                        \
+        memset(keys + idx, 0xDE, sizeof(K));                                                       \
+        memset(values + idx, 0xDE, sizeof(V));                                                     \
                                                                                                    \
-        self->ptr[idx] = METADATA_TOMBSTONE;                                                       \
+        self->ptr_[idx] = METADATA_TOMBSTONE;                                                      \
         self->available++;                                                                         \
         self->len--;                                                                               \
+        return true;                                                                               \
     }                                                                                              \
                                                                                                    \
-    void name##_put(name##_t* self, K key, V value) {                                              \
+    bool name##_put(name##_t* self, K key, V value) {                                              \
         map_entry_t gop = name##_get_or_put(self, key);                                            \
+        if (gop.value == NULL) return false;                                                       \
         *(V*)gop.value = value;                                                                    \
+        return true;                                                                               \
     }                                                                                              \
                                                                                                    \
-    V name##_fetch_put(name##_t* self, K key, V value) {                                           \
+    bool name##_fetch_put(name##_t* self, K key, V value, V* out) {                                \
         map_entry_t gop = name##_get_or_put(self, key);                                            \
-        V result = *(V*)gop.value;                                                                 \
+        if (gop.value == NULL) return false;                                                       \
+        *out = *(V*)gop.value;                                                                     \
         *(V*)gop.value = value;                                                                    \
-        return result;                                                                             \
-    }                                                                                              \
-                                                                                                   \
-    static void name##_put_assume_capacity_no_clobber(name##_t* self, K key, V value) {            \
-        const u64 hash = hash_fn(&key, sizeof(K));                                                 \
-        const u32 mask = self->capacity - 1;                                                       \
-        const u8 fingerprint = take_fingerprint(hash);                                             \
-                                                                                                   \
-        u32 idx = hash & mask;                                                                     \
-        meta_t* meta = self->ptr + idx;                                                            \
-                                                                                                   \
-        while (is_used(*meta)) {                                                                   \
-            idx = (idx + 1) & mask;                                                                \
-            meta = self->ptr + idx;                                                                \
-        }                                                                                          \
-                                                                                                   \
-        K* keys = map_keys(*self, K);                                                              \
-        V* values = map_values(*self, K, V);                                                       \
-        assert(self->available > 0);                                                               \
-                                                                                                   \
-        *meta = set_fingerprint(fingerprint);                                                      \
-        self->available--;                                                                         \
-        self->len++;                                                                               \
-                                                                                                   \
-        keys[idx] = key;                                                                           \
-        values[idx] = value;                                                                       \
-    }                                                                                              \
-                                                                                                   \
-    static void name##_grow_at_least(name##_t* self, usize capacity) {                             \
-        assert(self != NULL);                                                                      \
-        capacity = next_pow2_u64(capacity);                                                        \
-                                                                                                   \
-        name##_t new_map = {                                                                       \
-            .ptr = alloc_buffer(self->grow, capacity, sizeof(K), sizeof(V)),                       \
-            .len = 0,                                                                              \
-            .grow = self->grow,                                                                    \
-            .capacity = capacity,                                                                  \
-            .available = (capacity * LOAD_FACTOR) / 100,                                           \
-        };                                                                                         \
-                                                                                                   \
-        if (self->len > 0) {                                                                       \
-            K* keys = map_keys(*self, K);                                                          \
-            V* values = map_values(*self, K, V);                                                   \
-            meta_t* metas = self->ptr;                                                             \
-                                                                                                   \
-            for (usize i = 0; i < self->capacity; i++) {                                           \
-                if (!is_used(metas[i])) continue;                                                  \
-                name##_put_assume_capacity_no_clobber(&new_map, keys[i], values[i]);               \
-                if (self->len == new_map.len) break;                                               \
-            }                                                                                      \
-        }                                                                                          \
-                                                                                                   \
-        self->len = 0;                                                                             \
-        name##_release(self);                                                                      \
-        *self = new_map;                                                                           \
+        return true;                                                                               \
     }                                                                                              \
                                                                                                    \
     map_entry_t name##_get_or_put(name##_t* self, K key) {                                         \
         assert(self != NULL);                                                                      \
                                                                                                    \
         if (self->available == 0) {                                                                \
-            name##_grow_at_least(self, max(usize, MIN_CAPACITY, self->capacity + 1));              \
+            /* TODO: try to get only instead, if allocation fails */                               \
+            if (!name##_ensure_capacity(self, self->capacity + 1)) return (map_entry_t) {};        \
         }                                                                                          \
         K* keys = map_keys(*self, K);                                                              \
         V* values = map_values(*self, K, V);                                                       \
@@ -379,7 +398,7 @@ bool map_iter_next(map_iter_t* self) {
         u32 idx = hash & mask;                                                                     \
         u32 limit = self->capacity;                                                                \
         u32 first_tombstone_idx = INVALID_IDX;                                                     \
-        meta_t* meta = self->ptr + idx;                                                            \
+        meta_t* meta = self->ptr_ + idx;                                                           \
                                                                                                    \
         while (*meta != METADATA_FREE && limit > 0) {                                              \
             if (is_used(*meta) && get_fingerprint(*meta) == fingerprint) {                         \
@@ -397,12 +416,12 @@ bool map_iter_next(map_iter_t* self) {
             }                                                                                      \
             limit--;                                                                               \
             idx = (idx + 1) & mask;                                                                \
-            meta = self->ptr + idx;                                                                \
+            meta = self->ptr_ + idx;                                                               \
         }                                                                                          \
                                                                                                    \
         if (first_tombstone_idx != INVALID_IDX) {                                                  \
             idx = first_tombstone_idx;                                                             \
-            meta = self->ptr + idx;                                                                \
+            meta = self->ptr_ + idx;                                                               \
         }                                                                                          \
         *meta = set_fingerprint(fingerprint);                                                      \
         self->available--;                                                                         \
@@ -420,7 +439,7 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                    \
     map_iter_t name##_iter(name##_t self) {                                                        \
         return (map_iter_t) {                                                                      \
-            .meta = self.ptr,                                                                      \
+            .meta = self.ptr_,                                                                     \
             .key = map_keys(self, K),                                                              \
             .value = map_values(self, K, V),                                                       \
             .is_first = true,                                                                      \
@@ -433,5 +452,5 @@ bool map_iter_next(map_iter_t* self) {
     }
 
 #define HASHMAP_IMPL(K, V, hash_fn, equal_fn)                                                      \
-    HASHMAP_RAW_IMPL(K, V, map_##K##_##V, hash_fn, equal_fn)
+    HASHMAP_IMPL_RAW(K, V, map_##K##_##V, hash_fn, equal_fn)
 #endif

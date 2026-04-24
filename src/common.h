@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -45,12 +46,10 @@ typedef __uint128_t u128;
 
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
+#define unreachable __builtin_unreachable()
 
-#define at(items, idx)                                                                             \
-    ((idx) < ((items).len)) ? (items).ptr[idx] : (panic("Out of bounds access"), (items).ptr[0])
-
-#define for_each(type, item, list)                                                                 \
-    for (type* item = (list).ptr; item < (list).ptr + (list).len; ++item)
+#define for_each(type, item, items)                                                                \
+    for (type* item = (items).ptr; item < (items).ptr + (items).len; ++item)
 
 #define log_trace(...) log_impl(LOG_LEVEL_TRACE, __VA_ARGS__)
 #define log_debug(...) log_impl(LOG_LEVEL_DEBUG, __VA_ARGS__)
@@ -71,13 +70,11 @@ typedef enum {
 
 __attribute__((format(printf, 2, 3))) void log_impl(log_level_t level, const char* fmt, ...);
 
-// TODO:
-// #define assert_int(lhs, op, rhs) \
-//   do { \
-//     if (!((lhs)(op)(rhs))) { \
-//       fprintf(stderr, "failed assertion '%s %s %s': '%d %s %d'", ##lhs, ##op,
-//       \
-//               ##rhs, (lhs), ##op, (rhs)); \
-//       __builtin_trap(); \
-//     } \
-//   } while (false)
+#define array_front(self)   array_at((self), 0)
+#define array_back(self)    array_at((self), (self).len - 1)
+#define array_at(self, idx) (self).ptr[validate_idx((idx), (self).len)]
+
+static inline usize validate_idx(usize idx, usize len) {
+    if (idx < len) return idx;
+    panic("Out of bounds access");
+}

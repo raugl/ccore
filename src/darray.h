@@ -1,30 +1,38 @@
 #pragma once
 #include "allocator.h"
 #include "common.h"
-#include "slice.h"
 
-#define DARRAY_RAW_DECL(T, name, S)                                                                \
+#define DARRAY_DECL_RAW(T, name, P)                                                                \
     typedef struct {                                                                               \
         T* ptr;                                                                                    \
-        grow_policy_t grow;                                                                        \
+        grow_policy_t grow_;                                                                       \
         u32 len, capacity;                                                                         \
     } name##_t;                                                                                    \
                                                                                                    \
     name##_t name##_init_fixed(T* buffer, usize capacity);                                         \
     name##_t name##_init_arena(arena_t* arena, usize capacity);                                    \
     name##_t name##_init_alloc(allocator_t* alloc, usize capacity);                                \
-    S name##_slice(name##_t self, usize idx, usize len);                                           \
     void name##_release(name##_t* self);                                                           \
-    void name##_resize(name##_t* self, usize len);                                                 \
-    void name##_ensure_capacity(name##_t* self, usize capacity);                                   \
-    void name##_push(name##_t* self, T data);                                                      \
-    T name##_pop(name##_t* self);                                                                  \
-    void name##_insert(name##_t* self, T data, usize idx);                                         \
-    T name##_remove(name##_t* self, usize idx);
+                                                                                                   \
+    bool name##_ensure_capacity(name##_t* self, usize new_capacity);                               \
+    bool name##_resize(name##_t* self, usize new_len);                                             \
+    void name##_shrink_to_fit(name##_t* self);                                                     \
+    void name##_clear(name##_t* self);                                                             \
+                                                                                                   \
+    bool name##_push(name##_t* self, T item);                                                      \
+    bool name##_pop(name##_t* self, T* out);                                                       \
+    bool name##_back(name##_t* self, T* out);                                                      \
+    bool name##_insert(name##_t* self, usize idx, T item);                                         \
+    T name##_remove(name##_t* self, usize idx);                                                    \
+    T name##_swap_remove(name##_t* self, usize idx);                                               \
+    bool name##_push_many(name##_t* self, P items, usize len);                                     \
+    bool name##_insert_many(name##_t* self, usize idx, P items, usize len);                        \
+    void name##_remove_many(name##_t* self, usize idx, usize len);                                 \
+    void name##_swap_remove_many(name##_t* self, usize idx, usize len);
 
-#define DARRAY_DECL(T) DARRAY_RAW_DECL(T, array_##T, slice_##T##_t)
+#define DARRAY_DECL(T) DARRAY_DECL_RAW(T, darray_##T, const T*)
 
-DARRAY_DECL(u8);
+DARRAY_DECL_RAW(u8, darray_u8, const void*);
 DARRAY_DECL(u16);
 DARRAY_DECL(u32);
 DARRAY_DECL(u64);
@@ -41,139 +49,217 @@ DARRAY_DECL(bool);
 #ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
 
-// TODO: Try to pull out as much duplicated computation into non-generics helpers
-
 #define MIN_CAPACITY 8
 
-#define DARRAY_RAW_IMPL(T, name, S)                                                                \
+#define DARRAY_IMPL_RAW(T, name, P)                                                                \
     name##_t name##_init_fixed(T* buffer, usize capacity) {                                        \
         assert(buffer != NULL);                                                                    \
-        assert((uintptr_t)buffer % sizeof(max_align_t) == 0);                                      \
                                                                                                    \
         return (name##_t) {                                                                        \
             .ptr = buffer,                                                                         \
             .capacity = capacity,                                                                  \
-            .grow.kind = GROW_POLICY_FIXED,                                                        \
+            .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
     name##_t name##_init_arena(arena_t* arena, usize capacity) {                                   \
         assert(arena != NULL);                                                                     \
                                                                                                    \
-        name##_t self = {                                                                          \
-            .grow.arena = arena,                                                                   \
-            .grow.kind = GROW_POLICY_ARENA,                                                        \
+        return (name##_t) {                                                                        \
+            .ptr = arena_alloc(arena, capacity * sizeof(T)),                                       \
+            .capacity = capacity,                                                                  \
+            .grow_.arena = arena,                                                                  \
+            .grow_.kind = GROW_POLICY_ARENA,                                                       \
         };                                                                                         \
-        name##_ensure_capacity(&self, capacity);                                                   \
-        return self;                                                                               \
     }                                                                                              \
                                                                                                    \
     name##_t name##_init_alloc(allocator_t* alloc, usize capacity) {                               \
         assert(alloc != NULL);                                                                     \
                                                                                                    \
-        name##_t self = {                                                                          \
-            .grow.alloc = alloc,                                                                   \
-            .grow.kind = GROW_POLICY_ALLOC,                                                        \
+        return (name##_t) {                                                                        \
+            .ptr = alloc_alloc(alloc, capacity * sizeof(T)),                                       \
+            .capacity = capacity,                                                                  \
+            .grow_.alloc = alloc,                                                                  \
+            .grow_.kind = GROW_POLICY_ALLOC,                                                       \
         };                                                                                         \
-        name##_ensure_capacity(&self, capacity);                                                   \
-        return self;                                                                               \
     }                                                                                              \
                                                                                                    \
     void name##_release(name##_t* self) {                                                          \
         assert(self != NULL);                                                                      \
                                                                                                    \
-        switch (self->grow.kind) {                                                                 \
+        switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            log_error("attempted to release an arena allocated array");                            \
+            log_warn("attempted to release an arena allocated darray");                            \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            alloc_free(self->grow.alloc, *self);                                                   \
+            alloc_free(self->grow_.alloc, *self);                                                  \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            log_error("attempted to release a fixed buffer array");                                \
+            log_warn("attempted to release a fixed buffer darray");                                \
             break;                                                                                 \
         }                                                                                          \
-        memset(self, 0, sizeof(name##_t));                                                         \
+        memset(self->ptr, 0xDE, self->len * sizeof(T));                                            \
+        memset(self, 0xDE, sizeof(name##_t));                                                      \
     }                                                                                              \
                                                                                                    \
-    void name##_ensure_capacity(name##_t* self, usize capacity) {                                  \
+    /* FIXME: somehow try to detect u32 overflow for the new_capacity and return  out of memory */ \
+    bool name##_ensure_capacity(name##_t* self, usize new_capacity) {                              \
+        assert(self != NULL);                                                                      \
+        if (self->capacity >= new_capacity) return true;                                           \
+        new_capacity = next_pow2_u64(max_usize(MIN_CAPACITY, new_capacity));                       \
+        T* new_ptr;                                                                                \
+                                                                                                   \
+        switch (self->grow_.kind) {                                                                \
+        case GROW_POLICY_ARENA:                                                                    \
+            new_ptr = arena_realloc(self->grow_.arena, *self, new_capacity);                       \
+            if (new_ptr == NULL) return false;                                                     \
+            break;                                                                                 \
+        case GROW_POLICY_ALLOC:                                                                    \
+            new_ptr = alloc_realloc(self->grow_.alloc, *self, new_capacity);                       \
+            if (new_ptr == NULL) return false;                                                     \
+            break;                                                                                 \
+        case GROW_POLICY_FIXED:                                                                    \
+            /* panic("fixed buffer darray cannot allocate new buffer"); */                         \
+            return false;                                                                          \
+            break;                                                                                 \
+        }                                                                                          \
+        self->capacity = new_capacity;                                                             \
+        self->ptr = new_ptr;                                                                       \
+        return true;                                                                               \
+    }                                                                                              \
+                                                                                                   \
+    bool name##_resize(name##_t* self, usize new_len) {                                            \
         assert(self != NULL);                                                                      \
                                                                                                    \
-        if (self->capacity < capacity) {                                                           \
-            switch (self->grow.kind) {                                                             \
-            case GROW_POLICY_ARENA:                                                                \
-                self->ptr = arena_realloc(self->grow.arena, *self, capacity);                      \
-                break;                                                                             \
-            case GROW_POLICY_ALLOC:                                                                \
-                self->ptr = alloc_realloc(self->grow.alloc, *self, capacity);                      \
-                break;                                                                             \
-            case GROW_POLICY_FIXED:                                                                \
-                panic("fixed buffer array ran out of memory");                                     \
-                break;                                                                             \
+        if (self->capacity < new_len) {                                                            \
+            if (!name##_ensure_capacity(self, new_len)) return false;                              \
+        } else if (self->len > new_len) {                                                          \
+            memset(self->ptr + new_len, 0xDE, (self->len - new_len) * sizeof(T));                  \
+        }                                                                                          \
+        self->len = new_len;                                                                       \
+        return true;                                                                               \
+    }                                                                                              \
+                                                                                                   \
+    void name##_shrink_to_fit(name##_t* self) {                                                    \
+        assert(self != NULL);                                                                      \
+                                                                                                   \
+        switch (self->grow_.kind) {                                                                \
+        case GROW_POLICY_ARENA:                                                                    \
+            log_warn("attempted to shrink an arena allocated darray");                             \
+            break;                                                                                 \
+        case GROW_POLICY_ALLOC: {                                                                  \
+            usize new_capacity = self->len;                                                        \
+            if (new_capacity <= self->capacity / 4) new_capacity = next_pow2_u64(new_capacity);    \
+            if (new_capacity >= self->capacity) break;                                             \
+                                                                                                   \
+            T* new_ptr = alloc_realloc(self->grow_.alloc, *self, new_capacity * sizeof(T));        \
+            if (new_ptr != NULL) {                                                                 \
+                self->capacity = new_capacity;                                                     \
+                self->ptr = new_ptr;                                                               \
             }                                                                                      \
-            self->capacity = capacity;                                                             \
+            break;                                                                                 \
+        }                                                                                          \
+        case GROW_POLICY_FIXED:                                                                    \
+            log_warn("attempted to shrink a fixed buffer darray");                                 \
+            break;                                                                                 \
         }                                                                                          \
     }                                                                                              \
                                                                                                    \
-    S name##_slice(name##_t self, usize idx, usize len) {                                          \
-        assert(idx < self.len);                                                                    \
-        assert(idx + len <= self.len);                                                             \
-                                                                                                   \
-        return (S) {                                                                               \
-            .ptr = self.ptr + idx,                                                                 \
-            .len = (len > 0) ? len : self.len,                                                     \
-        };                                                                                         \
-    }                                                                                              \
-                                                                                                   \
-    void name##_resize(name##_t* self, usize len) {                                                \
+    void name##_clear(name##_t* self) {                                                            \
         assert(self != NULL);                                                                      \
                                                                                                    \
-        if (self->capacity < len) {                                                                \
-            name##_ensure_capacity(self, len);                                                     \
-        } else if (self->len > len) {                                                              \
-            memset(self->ptr + len, 0, (self->len - len) * sizeof(T));                             \
-        }                                                                                          \
-        self->len = len;                                                                           \
+        memset(self->ptr, 0xDE, self->len * sizeof(T));                                            \
+        self->len = 0;                                                                             \
     }                                                                                              \
                                                                                                    \
-    void name##_push(name##_t* self, T data) {                                                     \
-        assert(self != NULL);                                                                      \
-                                                                                                   \
-        if (self->len == self->capacity) {                                                         \
-            u32 new_capacity = max_u32(MIN_CAPACITY, self->capacity + self->capacity / 2);         \
-            name##_ensure_capacity(self, new_capacity);                                            \
-        }                                                                                          \
-        self->ptr[self->len++] = data;                                                             \
+    bool name##_insert(name##_t* self, usize idx, T item) {                                        \
+        return name##_insert_many(self, idx, &item, 1);                                            \
     }                                                                                              \
                                                                                                    \
-    T name##_pop(name##_t* self) {                                                                 \
+    bool name##_insert_many(name##_t* self, usize idx, P items, usize len) {                       \
         assert(self != NULL);                                                                      \
-        assert(self->len > 0);                                                                     \
-        assert(self->ptr != NULL);                                                                 \
-                                                                                                   \
-        return self->ptr[--self->len];                                                             \
-    }                                                                                              \
-                                                                                                   \
-    void name##_insert(name##_t* self, T data, usize idx) {                                        \
-        assert(self != NULL);                                                                      \
+        assert(items != NULL);                                                                     \
         assert(idx <= self->len);                                                                  \
                                                                                                    \
-        if (self->len == self->capacity) {                                                         \
-            u32 new_capacity = max_u32(MIN_CAPACITY, self->capacity + self->capacity / 2);         \
-            name##_ensure_capacity(self, new_capacity);                                            \
+        if (self->len + len >= self->capacity) {                                                   \
+            if (!name##_ensure_capacity(self, self->len + len)) return false;                      \
         }                                                                                          \
-        memmove(self->ptr + idx + 1, self->ptr + idx, self->len - idx);                            \
-        self->ptr[idx] = data;                                                                     \
+        memmove(self->ptr + idx + len, self->ptr + idx, (self->len - idx) * sizeof(T));            \
+        memcpy(self->ptr + idx, items, len * sizeof(T));                                           \
+        self->len += len;                                                                          \
+        return true;                                                                               \
     }                                                                                              \
                                                                                                    \
     T name##_remove(name##_t* self, usize idx) {                                                   \
         assert(self != NULL);                                                                      \
         assert(idx < self->len);                                                                   \
                                                                                                    \
-        T item = self->ptr[idx];                                                                   \
-        memmove(self->ptr + idx, self->ptr + idx + 1, self->len - idx - 1);                        \
-        return item;                                                                               \
+        T old_val = self->ptr[idx];                                                                \
+        name##_remove_many(self, idx, 1);                                                          \
+        return old_val;                                                                            \
+    }                                                                                              \
+                                                                                                   \
+    void name##_remove_many(name##_t* self, usize idx, usize len) {                                \
+        assert(self != NULL);                                                                      \
+        assert(idx + len <= self->len);                                                            \
+                                                                                                   \
+        memmove(self->ptr + idx, self->ptr + idx + len, self->len - idx * sizeof(T));              \
+        memset(self->ptr + (self->len - len), 0xDE, len * sizeof(T));                              \
+        self->len -= len;                                                                          \
+    }                                                                                              \
+                                                                                                   \
+    T name##_swap_remove(name##_t* self, usize idx) {                                              \
+        assert(self != NULL);                                                                      \
+        assert(idx < self->len);                                                                   \
+                                                                                                   \
+        T old_val = self->ptr[idx];                                                                \
+        name##_swap_remove_many(self, idx, 1);                                                     \
+        return old_val;                                                                            \
+    }                                                                                              \
+                                                                                                   \
+    void name##_swap_remove_many(name##_t* self, usize idx, usize len) {                           \
+        assert(self != NULL);                                                                      \
+        assert(idx + len <= self->len);                                                            \
+                                                                                                   \
+        memmove(self->ptr + idx, self->ptr + (self->len - len), len * sizeof(T));                  \
+        memset(self->ptr + (self->len - len), 0xDE, len * sizeof(T));                              \
+        self->len -= len;                                                                          \
+    }                                                                                              \
+                                                                                                   \
+    bool name##_push(name##_t* self, T item) {                                                     \
+        return name##_push_many(self, &item, 1);                                                   \
+    }                                                                                              \
+                                                                                                   \
+    bool name##_push_many(name##_t* self, P items, usize len) {                                    \
+        assert(self != NULL);                                                                      \
+        assert(items != NULL);                                                                     \
+                                                                                                   \
+        if (self->len + len >= self->capacity) {                                                   \
+            if (!name##_ensure_capacity(self, self->len + len)) return false;                      \
+        }                                                                                          \
+        memcpy(self->ptr + self->len, items, len * sizeof(T));                                     \
+        self->len += len;                                                                          \
+        return true;                                                                               \
+    }                                                                                              \
+                                                                                                   \
+    bool name##_pop(name##_t* self, T* out) {                                                      \
+        assert(self != NULL);                                                                      \
+        if (self->len == 0) return false;                                                          \
+                                                                                                   \
+        if (out != NULL) *out = self->ptr[self->len - 1];                                          \
+        memset(self->ptr + self->len - 1, 0xDE, sizeof(T));                                        \
+        self->len--;                                                                               \
+        return true;                                                                               \
+    }                                                                                              \
+                                                                                                   \
+    bool name##_back(name##_t* self, T* out) {                                                     \
+        assert(self != NULL);                                                                      \
+        assert(out != NULL);                                                                       \
+        if (self->len == 0) return false;                                                          \
+                                                                                                   \
+        *out = self->ptr[self->len - 1];                                                           \
+        return true;                                                                               \
     }
 
-#define DARRAY_IMPL(T) DARRAY_RAW_IMPL(T, array_##T, slice_##T##_t)
+#define DARRAY_IMPL(T) DARRAY_IMPL_RAW(T, darray_##T, const T*)
 #endif

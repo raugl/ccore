@@ -1,0 +1,7 @@
+#include "allocator.c"
+#include "common.c"
+#include "hash.c"
+#include "test/fuzz_deque.c"
+#include "test/fuzz_pqueue.c"
+#include "test/test_darray.c"
+#include "test/test_hashmap.c"

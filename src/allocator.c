@@ -2,7 +2,21 @@
 #include <stdlib.h>
 #include "math.h"
 
-void* alloc_alloc_raw(allocator_t* self, usize size) {
+// TODO: General purpose interface
+void* malloc_allocator_fn(void* ctx, void* ptr, usize old_size, usize new_size) {
+    if (ptr == NULL && old_size == 0) {
+        return malloc(new_size);
+    }
+    if (ptr != NULL && new_size > old_size) {
+        return realloc(ptr, new_size);
+    }
+    if (ptr != NULL && new_size == 0) {
+        free(ptr);
+    }
+    return NULL;
+}
+
+void* alloc_alloc(allocator_t* self, usize size) {
     void* mem = malloc(size);
     if (mem == NULL) panic("malloc out of memory");
     return mem;
@@ -35,7 +49,7 @@ arena_t arena_init_fixed(void* buffer, usize size) {
 arena_t arena_init_alloc(allocator_t* alloc, usize size) {
     assert(alloc != NULL);
 
-    u8* ptr = alloc_alloc(alloc, u8, size);
+    u8* ptr = alloc_alloc(alloc, size * sizeof(u8));
     return (arena_t) {
         .ptr = ptr,
         .alloc = alloc,
@@ -75,7 +89,7 @@ void arena_clear(arena_t* self) {
     self->index = 0;
 }
 
-void* arena_alloc_raw(arena_t* self, usize size) {
+void* arena_alloc(arena_t* self, usize size) {
     assert(self != NULL);
     assert(self->index + size <= self->capacity);
 
@@ -85,7 +99,6 @@ void* arena_alloc_raw(arena_t* self, usize size) {
     return start;
 }
 
-// TODO: return null if grow in place fails
 void* arena_realloc_raw(arena_t* self, void* ptr, usize old_size, usize new_size) {
     u8* start = ptr;
     assert(self != NULL);
@@ -97,10 +110,21 @@ void* arena_realloc_raw(arena_t* self, void* ptr, usize old_size, usize new_size
         assert(self->index <= self->capacity);
         return start;
     }
-    panic("arena should only try to grow in place, not memcpy into a new allocation");
-    return NULL;
-
-    start = arena_alloc_raw(self, new_size);
+    start = arena_alloc(self, new_size);
     memcpy(start, ptr, old_size);
     return start;
+}
+
+bool arena_try_extend_raw(arena_t* self, void* ptr, usize old_size, usize new_size) {
+    u8* start = ptr;
+    assert(self != NULL);
+    assert(self->ptr <= start);
+    assert(start + old_size <= self->ptr + self->index);
+
+    if (start + old_size == self->ptr + self->index) {
+        self->index += (isize)new_size - (isize)old_size;
+        assert(self->index <= self->capacity);
+        return true;
+    }
+    return false;
 }

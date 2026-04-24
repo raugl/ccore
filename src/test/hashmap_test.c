@@ -1,12 +1,10 @@
-#include "common.h"
-#include "slice.h"
-#include "testing.h"
-
 #define GENERICS_IMPLEMENTATION
-#include "hashmap.h"
+#include "../common.h"
+#include "../testing.h"
+#include "../hashmap.h"
 
 // #define MUNIT_ENABLE_ASSERT_ALIASES
-#include "../vendor/munit/munit.h"
+// #include "../vendor/munit/munit.h"
 
 void basic_usage(void) {
     //     allocator_t alloc = {};
@@ -43,10 +41,10 @@ void basic_usage(void) {
     assert_u32(sum, ==, total);
 }
 
-// HASHMAP_RAW_DECL(u64, string_t, map);
-// HASHMAP_RAW_IMPL(u64, string_t, map, hash_bytes, equal_bytes);
+// HASHMAP_DECL_RAW(u64, string_t, map);
+// HASHMAP_IMPL_RAW(u64, string_t, map, hash_bytes, equal_bytes);
 
-int main(void) {
+// int main(void) {
     // HASHMAP_ARRAY(buffer, u64, string_t, 1024) = {0};
     // map_t map = map_init_fixed(buffer, 1024);
 
@@ -82,4 +80,4 @@ int main(void) {
     //
     // cleanup:
     //     map_release(&map);
-}
+// }

@@ -8,6 +8,10 @@
             .url = "git+https://github.com/raugl/compile-commands-zig#6ec1155de01a068f16f4776da7a450d18d9ad67e",
             .hash = "compile_commands_zig-0.0.1-truua3ozAAARf18I2T-Jf9lo4RCGwevCtIAx8NSeC1Wl",
         },
+        .munit = .{
+            .url = "https://github.com/nemequ/munit/archive/fbbdf1467eb0d04a6ee465def2e529e4c87f2118.tar.gz",
+            .hash = "N-V-__8AAF6pAQC3PvqSl74WAJLbocxqMOEPUqlrvO-edu2-",
+        },
     },
     .paths = .{
         "build.zig",
