@@ -1,16 +1,29 @@
+#pragma once
+#include "common.h"
+
+#define SORT_DECL(T) SORT_DECL_RAW(T, T)
+
+#define SORT_DECL_RAW(T, name) void sort_unstable_##name(T* arr, usize len);
+
+SORT_DECL(f32)
+
+#ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
 
+#define SORT_IMPL(T, cmp_fn) SORT_IMPL_RAW(T, T, cmp_fn)
+
 #define SORT_IMPL_RAW(T, name, cmp_fn)                                                             \
+                                                                                                   \
     static void insertion_sort_##name(T* arr, usize len) {                                         \
         for (usize i = 1; i < len; ++i) {                                                          \
             T key = arr[i];                                                                        \
             usize j = i;                                                                           \
                                                                                                    \
-            while (j > 0 && cmp_fn(arr[i], arr[j - 1])) {                                          \
+            while (j > 0 && cmp_fn(key, arr[j - 1])) {                                             \
                 arr[j] = arr[j - 1];                                                               \
                 j--;                                                                               \
             }                                                                                      \
-            arr[j] = arr[i];                                                                       \
+            arr[j] = key;                                                                          \
         }                                                                                          \
     }                                                                                              \
                                                                                                    \
@@ -57,7 +70,7 @@
                                                                                                    \
     static usize partition_##name(T* arr, usize lo, usize hi) {                                    \
         usize mid = lo + (hi - lo) / 2;                                                            \
-        usize pivot = arr[median3_##name(arr, lo, mid, hi)];                                       \
+        T pivot = arr[median3_##name(arr, lo, mid, hi)];                                           \
         usize i = lo - 1;                                                                          \
         usize j = hi + 1;                                                                          \
                                                                                                    \
@@ -100,5 +113,4 @@
         u16 depth = log2_u64(len) * 2;                                                             \
         intro_sort_##name(arr, 0, len - 1, depth);                                                 \
     }
-
-#define SORT_IMPL(T, cmp_fn) SORT_IMPL_RAW(T, T, cmp_fn)
+#endif

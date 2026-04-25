@@ -1,5 +1,4 @@
 #include "common.h"
-#include <stdlib.h>
 #include "hash.h"
 
 #if defined(_WIN32)
@@ -15,11 +14,11 @@
 #include "hashmap.h"
 #include "pqueue.h"
 #include "slice.h"
+#include "sort.h"
 
 // =================================================================================================
 // Section: Generic instantiations
 // =================================================================================================
-
 static bool cmp_u64(u64 a, u64 b) {
     return a < b; // min heap
 }
@@ -28,6 +27,8 @@ static bool cmp_f32(f32 a, f32 b) {
     return a < b; // min heap
 }
 
+// TODO: I will probably end up getting rid of slices entirely. Manually passing the pointer and
+// size is much easier to manage. Strings are the only useful application of these.
 SLICE_IMPL(u8)
 SLICE_IMPL(u32)
 SLICE_IMPL(u64)
@@ -50,6 +51,9 @@ PQUEUE_IMPL(u64, cmp_u64)
 PQUEUE_IMPL(f32, cmp_f32)
 
 HASHMAP_IMPL_RAW(u32, u32, map_u32, hash_bytes, equal_bytes)
+HASHMAP_IMPL_RAW(string_t, u64, map_str_u64, hash_slice, equal_slice)
+
+SORT_IMPL(f32, cmp_f32)
 
 // =================================================================================================
 // Section: Panic and Logging
@@ -81,12 +85,9 @@ void panic_log_impl(const char* fmt, ...) {
 
 void log_impl(log_level_t level, const char* fmt, ...) {
     static const char* labels[] = { "[trace]", "[debug]", "[info ]", "[warn ]", "[error]" };
-    static const char* colors[] = { "\x1b[1;90m",
-                                    "\x1b[1;34m",
-                                    "\x1b[32m",
-                                    "\x1b[33m",
-                                    "\x1b[31m" };
-
+    static const char* colors[] = {
+        "\x1b[1;90m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m",
+    };
     if (isatty(fileno(stderr))) {
         fputs(colors[level], stderr);
         fputs(labels[level], stderr);

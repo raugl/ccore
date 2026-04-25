@@ -2,6 +2,8 @@
 #include "allocator.h"
 #include "common.h"
 
+#define DEQUE_DECL(T) DEQUE_DECL_RAW(T, deque_##T)
+
 #define DEQUE_DECL_RAW(T, name)                                                                    \
     typedef struct {                                                                               \
         T* ptr_;                                                                                   \
@@ -22,8 +24,6 @@
     bool name##_front(name##_t* self, T* out);                                                     \
     bool name##_back(name##_t* self, T* out);
 
-#define DEQUE_DECL(T) DEQUE_DECL_RAW(T, deque_##T)
-
 #define deque_at(self, idx)                                                                        \
     (self).ptr_[(validate_idx((idx), (self).len) + (self).head) & ((self).capacity - 1)]
 
@@ -35,6 +35,8 @@ DEQUE_DECL(f32)
 #ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
 #define MIN_CAPACITY 8
+
+#define DEQUE_IMPL(T) DEQUE_IMPL_RAW(T, deque_##T)
 
 #define DEQUE_IMPL_RAW(T, name)                                                                    \
     name##_t name##_init_fixed(T* buffer, usize capacity) {                                        \
@@ -191,6 +193,4 @@ DEQUE_DECL(f32)
         if (out != NULL) *out = self->ptr_[(self->head + self->len) & mask];                       \
         return true;                                                                               \
     }
-
-#define DEQUE_IMPL(T) DEQUE_IMPL_RAW(T, deque_##T)
 #endif

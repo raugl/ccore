@@ -20,6 +20,7 @@
     static type max_##type(type a, type b) {                                                       \
         return (a > b) ? a : b;                                                                    \
     }
+
 MATH_TYPE_DECLS(X)
 
 static bool is_pow2(usize num) {

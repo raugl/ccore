@@ -2,6 +2,8 @@
 #include "allocator.h"
 #include "common.h"
 
+#define PQUEUE_DECL(T) PQUEUE_DECL_RAW(T, pqueue_##T)
+
 #define PQUEUE_DECL_RAW(T, name)                                                                   \
     typedef struct {                                                                               \
         T* ptr_;                                                                                   \
@@ -19,8 +21,6 @@
     bool name##_push(name##_t* self, T item);                                                      \
     bool name##_pop(name##_t* self, T* out);
 
-#define PQUEUE_DECL(T) PQUEUE_DECL_RAW(T, pqueue_##T)
-
 // TODO: This should return an optional, move it to the template
 #define pqueue_peek(self) array_at((self), 0)
 
@@ -31,6 +31,8 @@ PQUEUE_DECL(f32)
 
 #ifdef GENERICS_IMPLEMENTATION
 #define MIN_CAPACITY 8
+
+#define PQUEUE_IMPL(T, cmp_fn) PQUEUE_IMPL_RAW(T, pqueue_##T, cmp_fn)
 
 #define PQUEUE_IMPL_RAW(T, name, cmp_fn)                                                           \
     static void sift_up_##name(T* arr, usize node) {                                               \
@@ -170,6 +172,4 @@ PQUEUE_DECL(f32)
         sift_down_##name(self->ptr_, self->len, 0);                                                \
         return true;                                                                               \
     }
-
-#define PQUEUE_IMPL(T, cmp_fn) PQUEUE_IMPL_RAW(T, pqueue_##T, cmp_fn)
 #endif

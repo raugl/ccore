@@ -2,6 +2,8 @@
 #include "allocator.h"
 #include "common.h"
 
+#define DARRAY_DECL(T) DARRAY_DECL_RAW(T, darray_##T, const T*)
+
 #define DARRAY_DECL_RAW(T, name, P)                                                                \
     typedef struct {                                                                               \
         T* ptr;                                                                                    \
@@ -30,8 +32,6 @@
     void name##_remove_many(name##_t* self, usize idx, usize len);                                 \
     void name##_swap_remove_many(name##_t* self, usize idx, usize len);
 
-#define DARRAY_DECL(T) DARRAY_DECL_RAW(T, darray_##T, const T*)
-
 DARRAY_DECL_RAW(u8, darray_u8, const void*)
 DARRAY_DECL(u32)
 DARRAY_DECL(u64)
@@ -39,8 +39,9 @@ DARRAY_DECL(f32)
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
-
 #define MIN_CAPACITY 8
+
+#define DARRAY_IMPL(T) DARRAY_IMPL_RAW(T, darray_##T, const T*)
 
 #define DARRAY_IMPL_RAW(T, name, P)                                                                \
     name##_t name##_init_fixed(T* buffer, usize capacity) {                                        \
@@ -257,6 +258,4 @@ DARRAY_DECL(f32)
         *out = self->ptr[self->len - 1];                                                           \
         return true;                                                                               \
     }
-
-#define DARRAY_IMPL(T) DARRAY_IMPL_RAW(T, darray_##T, const T*)
 #endif

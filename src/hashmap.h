@@ -1,6 +1,7 @@
 #pragma once
 #include "allocator.h"
 #include "common.h"
+#include "slice.h"
 
 // TODO: Add rehash function.
 // TODO: Probably add a clone function at some point.
@@ -25,6 +26,12 @@ typedef struct {
 
 bool map_iter_next(map_iter_t* self);
 
+#define HASHMAP_ARRAY(var, K, V, size)                                                             \
+    alignas(max_align_t)                                                                           \
+        u8 var[(sizeof(meta_t) + sizeof(K) + sizeof(V)) * size + sizeof(max_align_t) * 2]
+
+#define HASHMAP_DECL(K, V) HASHMAP_DECL_RAW(K, V, map_##K##_##V)
+
 #define HASHMAP_DECL_RAW(K, V, name)                                                               \
     typedef struct {                                                                               \
         meta_t* ptr_;                                                                              \
@@ -47,15 +54,8 @@ bool map_iter_next(map_iter_t* self);
     bool name##_remove(name##_t* self, K key);                                                     \
     map_iter_t name##_iter(name##_t self);
 
-#define HASHMAP_DECL(K, V) HASHMAP_DECL_RAW(K, V, map_##K##_##V)
-
-#define HASHMAP_ARRAY(var, K, V, size)                                                             \
-    alignas(max_align_t)                                                                           \
-        u8 var[(sizeof(meta_t) + sizeof(K) + sizeof(V)) * size + sizeof(max_align_t) * 2]
-
-// Specialize here whichever hashmaps you always want available. Instantiation is also possible in a
-// single translation unit for more specialized types.
 HASHMAP_DECL_RAW(u32, u32, map_u32)
+HASHMAP_DECL_RAW(string_t, u64, map_str_u64)
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "hash.h"
@@ -147,6 +147,9 @@ bool map_iter_next(map_iter_t* self) {
         self->remaining
     );
 }
+
+#define HASHMAP_IMPL(K, V, hash_fn, equal_fn)                                                      \
+    HASHMAP_IMPL_RAW(K, V, map_##K##_##V, hash_fn, equal_fn)
 
 #define HASHMAP_IMPL_RAW(K, V, name, hash_fn, equal_fn)                                            \
     name##_t name##_init_fixed(void* buffer, usize capacity) {                                     \
@@ -414,7 +417,4 @@ bool map_iter_next(map_iter_t* self) {
             .value_sizeof = sizeof(V),                                                             \
         };                                                                                         \
     }
-
-#define HASHMAP_IMPL(K, V, hash_fn, equal_fn)                                                      \
-    HASHMAP_IMPL_RAW(K, V, map_##K##_##V, hash_fn, equal_fn)
 #endif
