@@ -10,8 +10,8 @@
     } name##_t;                                                                                    \
                                                                                                    \
     name##_t name##_init_fixed(T* buffer, usize capacity);                                         \
-    name##_t name##_init_arena(arena_t* arena, usize capacity);                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity);                                \
+    name##_t name##_init_arena(arena_t* arena);                                                    \
+    name##_t name##_init_alloc(allocator_t* alloc);                                                \
     void name##_release(name##_t* self);                                                           \
                                                                                                    \
     bool name##_ensure_capacity(name##_t* self, usize new_capacity);                               \
@@ -32,19 +32,10 @@
 
 #define DARRAY_DECL(T) DARRAY_DECL_RAW(T, darray_##T, const T*)
 
-DARRAY_DECL_RAW(u8, darray_u8, const void*);
-DARRAY_DECL(u16);
-DARRAY_DECL(u32);
-DARRAY_DECL(u64);
-
-DARRAY_DECL(i8);
-DARRAY_DECL(i16);
-DARRAY_DECL(i32);
-DARRAY_DECL(i64);
-
-DARRAY_DECL(f32);
-DARRAY_DECL(f64);
-DARRAY_DECL(bool);
+DARRAY_DECL_RAW(u8, darray_u8, const void*)
+DARRAY_DECL(u32)
+DARRAY_DECL(u64)
+DARRAY_DECL(f32)
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
@@ -54,31 +45,24 @@ DARRAY_DECL(bool);
 #define DARRAY_IMPL_RAW(T, name, P)                                                                \
     name##_t name##_init_fixed(T* buffer, usize capacity) {                                        \
         assert(buffer != NULL);                                                                    \
-                                                                                                   \
         return (name##_t) {                                                                        \
             .ptr = buffer,                                                                         \
-            .capacity = capacity,                                                                  \
+            .capacity = (u32)capacity,                                                             \
             .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_arena(arena_t* arena, usize capacity) {                                   \
+    name##_t name##_init_arena(arena_t* arena) {                                                   \
         assert(arena != NULL);                                                                     \
-                                                                                                   \
         return (name##_t) {                                                                        \
-            .ptr = arena_alloc(arena, capacity * sizeof(T)),                                       \
-            .capacity = capacity,                                                                  \
             .grow_.arena = arena,                                                                  \
             .grow_.kind = GROW_POLICY_ARENA,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity) {                               \
+    name##_t name##_init_alloc(allocator_t* alloc) {                                               \
         assert(alloc != NULL);                                                                     \
-                                                                                                   \
         return (name##_t) {                                                                        \
-            .ptr = alloc_alloc(alloc, capacity * sizeof(T)),                                       \
-            .capacity = capacity,                                                                  \
             .grow_.alloc = alloc,                                                                  \
             .grow_.kind = GROW_POLICY_ALLOC,                                                       \
         };                                                                                         \
@@ -89,20 +73,21 @@ DARRAY_DECL(bool);
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            log_warn("attempted to release an arena allocated darray");                            \
+            /* TODO: Discard the result, this is a best effort and always safe. */                 \
+            arena_try_resize(self->grow_.arena, self->ptr, self->capacity * sizeof(T), 0);         \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            alloc_free(self->grow_.alloc, *self);                                                  \
+            alloc_free(self->grow_.alloc, self->ptr, self->capacity * sizeof(T));                  \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            log_warn("attempted to release a fixed buffer darray");                                \
+            memset(self->ptr, 0xDE, self->capacity * sizeof(T));                                   \
             break;                                                                                 \
         }                                                                                          \
         memset(self->ptr, 0xDE, self->len * sizeof(T));                                            \
         memset(self, 0xDE, sizeof(name##_t));                                                      \
     }                                                                                              \
                                                                                                    \
-    /* FIXME: somehow try to detect u32 overflow for the new_capacity and return  out of memory */ \
+    /* FIXME: somehow try to detect u32 overflow for the new_capacity and return out of memory */  \
     bool name##_ensure_capacity(name##_t* self, usize new_capacity) {                              \
         assert(self != NULL);                                                                      \
         if (self->capacity >= new_capacity) return true;                                           \
@@ -111,19 +96,26 @@ DARRAY_DECL(bool);
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            new_ptr = arena_realloc(self->grow_.arena, *self, new_capacity);                       \
-            if (new_ptr == NULL) return false;                                                     \
+            new_ptr = arena_realloc(                                                               \
+                self->grow_.arena,                                                                 \
+                self->ptr,                                                                         \
+                self->capacity * sizeof(T),                                                        \
+                new_capacity * sizeof(T)                                                           \
+            );                                                                                     \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            new_ptr = alloc_realloc(self->grow_.alloc, *self, new_capacity);                       \
-            if (new_ptr == NULL) return false;                                                     \
+            new_ptr = alloc_realloc(                                                               \
+                self->grow_.alloc,                                                                 \
+                self->ptr,                                                                         \
+                self->capacity * sizeof(T),                                                        \
+                new_capacity * sizeof(T)                                                           \
+            );                                                                                     \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            /* panic("fixed buffer darray cannot allocate new buffer"); */                         \
             return false;                                                                          \
-            break;                                                                                 \
         }                                                                                          \
-        self->capacity = new_capacity;                                                             \
+        if (new_ptr == NULL) return false;                                                         \
+        self->capacity = (u32)new_capacity;                                                        \
         self->ptr = new_ptr;                                                                       \
         return true;                                                                               \
     }                                                                                              \
@@ -136,7 +128,7 @@ DARRAY_DECL(bool);
         } else if (self->len > new_len) {                                                          \
             memset(self->ptr + new_len, 0xDE, (self->len - new_len) * sizeof(T));                  \
         }                                                                                          \
-        self->len = new_len;                                                                       \
+        self->len = (u32)new_len;                                                                  \
         return true;                                                                               \
     }                                                                                              \
                                                                                                    \
@@ -152,9 +144,14 @@ DARRAY_DECL(bool);
             if (new_capacity <= self->capacity / 4) new_capacity = next_pow2_u64(new_capacity);    \
             if (new_capacity >= self->capacity) break;                                             \
                                                                                                    \
-            T* new_ptr = alloc_realloc(self->grow_.alloc, *self, new_capacity * sizeof(T));        \
+            T* new_ptr = alloc_realloc(                                                            \
+                self->grow_.alloc,                                                                 \
+                self->ptr,                                                                         \
+                self->capacity * sizeof(T),                                                        \
+                new_capacity * sizeof(T)                                                           \
+            );                                                                                     \
             if (new_ptr != NULL) {                                                                 \
-                self->capacity = new_capacity;                                                     \
+                self->capacity = (u32)new_capacity;                                                \
                 self->ptr = new_ptr;                                                               \
             }                                                                                      \
             break;                                                                                 \

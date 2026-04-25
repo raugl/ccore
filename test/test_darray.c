@@ -1,18 +1,18 @@
-#include "../common.h"
-#include "../darray.h"
-#include "../slice.h"
-#include "../testing.h"
+#include "common.h"
+#include "darray.h"
+#include "slice.h"
+#include "testing.h"
 
 #define MAX_CAPACITY 256
 
-void test_darray_basic(test_grow_policy_t grow) {
+static void test_darray_basic(test_grow_policy_t grow) {
     BEGIN_TEST("test_darray_basic");
     SETUP_TEST(arr, darray_u32, u32, grow);
 
-    for (usize i = 0; i < 10; ++i) {
+    for (u32 i = 0; i < 10; ++i) {
         assert_true(darray_u32_push(&arr, i + 1));
     }
-    for (usize i = 0; i < 10; ++i) {
+    for (u32 i = 0; i < 10; ++i) {
         assert_u32(array_at(arr, i), ==, i + 1);
     }
 
@@ -45,11 +45,11 @@ void test_darray_basic(test_grow_policy_t grow) {
     END_TEST();
 }
 
-void test_darray_ordered_remove(test_grow_policy_t grow) {
+static void test_darray_ordered_remove(test_grow_policy_t grow) {
     BEGIN_TEST("test_darray_ordered_remove");
     SETUP_TEST(arr, darray_u32, u32, grow);
 
-    for (usize i = 0; i < 10; ++i) {
+    for (u32 i = 0; i < 10; ++i) {
         assert_true(darray_u32_push(&arr, i));
     }
 
@@ -71,11 +71,11 @@ void test_darray_ordered_remove(test_grow_policy_t grow) {
     END_TEST();
 }
 
-void test_darray_swap_remove(test_grow_policy_t grow) {
+static void test_darray_swap_remove(test_grow_policy_t grow) {
     BEGIN_TEST("test_darray_swap_remove");
     SETUP_TEST(arr, darray_u32, u32, grow);
 
-    for (usize i = 0; i < 10; ++i) {
+    for (u32 i = 0; i < 10; ++i) {
         assert_true(darray_u32_push(&arr, i));
     }
 
@@ -97,7 +97,7 @@ void test_darray_swap_remove(test_grow_policy_t grow) {
     END_TEST();
 }
 
-void test_darray_insert(test_grow_policy_t grow) {
+static void test_darray_insert(test_grow_policy_t grow) {
     BEGIN_TEST("test_darray_insert");
     SETUP_TEST(arr, darray_u32, u32, grow);
 
@@ -128,7 +128,7 @@ void test_darray_insert(test_grow_policy_t grow) {
     END_TEST();
 }
 
-void test_darray_growing(test_grow_policy_t grow) {
+static void test_darray_growing(test_grow_policy_t grow) {
     BEGIN_TEST("test_darray_grow");
     SETUP_TEST(arr, darray_u8, u8, grow);
 
@@ -149,7 +149,7 @@ void test_darray_growing(test_grow_policy_t grow) {
     END_TEST();
 }
 
-void test_darray_stack(test_grow_policy_t grow) {
+static void test_darray_stack(test_grow_policy_t grow) {
     BEGIN_TEST("test_darray_stack");
     SETUP_TEST(arr, darray_u32, u32, grow);
 
@@ -158,7 +158,7 @@ void test_darray_stack(test_grow_policy_t grow) {
     assert_true(darray_u32_push(&arr, 2));
     assert_size(arr.len, ==, 3);
 
-    for (usize i = arr.len; i-- > 0;) {
+    for (u32 i = arr.len; i-- > 0;) {
         u32 peek, pop;
         assert_true(darray_u32_back(&arr, &peek));
         assert_true(darray_u32_pop(&arr, &pop));
@@ -172,10 +172,8 @@ void test_darray_stack(test_grow_policy_t grow) {
     END_TEST();
 }
 
-// TODO: Formalize the idea of arena's maybe being able to resize in place. Try to shrink when
-// releasing an arena backed data structure if it is the last allocation.
 // FIXME: The arena is not getting reset between tests
-void test_darray(void) {
+static void test_darray(void) {
     u32 fixed_buf[MAX_CAPACITY] = { 0 };
     test_grow_policy_t grow_fixed = {
         .buffer = fixed_buf,

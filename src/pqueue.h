@@ -1,8 +1,6 @@
 #pragma once
 #include "allocator.h"
 #include "common.h"
-// FIXME: When initializing with a capacity, the arena or allocator might fail, resulting in a
-// invalid state. I don't see a good way of returning that error without destroying my API.
 
 #define PQUEUE_DECL_RAW(T, name)                                                                   \
     typedef struct {                                                                               \
@@ -12,8 +10,8 @@
     } name##_t;                                                                                    \
                                                                                                    \
     name##_t name##_init_fixed(T* buffer, usize capacity);                                         \
-    name##_t name##_init_arena(arena_t* arena, usize capacity);                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity);                                \
+    name##_t name##_init_arena(arena_t* arena);                                                    \
+    name##_t name##_init_alloc(allocator_t* alloc);                                                \
     void name##_release(name##_t* self);                                                           \
                                                                                                    \
     name##_t name##_from_fixed(T* buffer, usize capacity);                                         \
@@ -26,8 +24,12 @@
 // TODO: This should return an optional, move it to the template
 #define pqueue_peek(self) array_at((self), 0)
 
-PQUEUE_DECL(u32);
+PQUEUE_DECL(u8)
+PQUEUE_DECL(u32)
+PQUEUE_DECL(u64)
+PQUEUE_DECL(f32)
 
+#ifdef GENERICS_IMPLEMENTATION
 #define MIN_CAPACITY 8
 
 #define PQUEUE_IMPL_RAW(T, name, cmp_fn)                                                           \
@@ -63,26 +65,22 @@ PQUEUE_DECL(u32);
         assert(buffer != NULL);                                                                    \
         return (name##_t) {                                                                        \
             .ptr_ = buffer,                                                                        \
-            .capacity = capacity,                                                                  \
+            .capacity = (u32)capacity,                                                             \
             .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_arena(arena_t* arena, usize capacity) {                                   \
+    name##_t name##_init_arena(arena_t* arena) {                                                   \
         assert(arena != NULL);                                                                     \
         return (name##_t) {                                                                        \
-            .ptr_ = arena_alloc(arena, capacity * sizeof(T)),                                      \
-            .capacity = capacity,                                                                  \
             .grow_.arena = arena,                                                                  \
             .grow_.kind = GROW_POLICY_ARENA,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity) {                               \
+    name##_t name##_init_alloc(allocator_t* alloc) {                                               \
         assert(alloc != NULL);                                                                     \
         return (name##_t) {                                                                        \
-            .ptr_ = alloc_alloc(alloc, capacity * sizeof(T)),                                      \
-            .capacity = capacity,                                                                  \
             .grow_.alloc = alloc,                                                                  \
             .grow_.kind = GROW_POLICY_ALLOC,                                                       \
         };                                                                                         \
@@ -95,7 +93,7 @@ PQUEUE_DECL(u32);
         }                                                                                          \
         return (name##_t) {                                                                        \
             .ptr_ = buffer,                                                                        \
-            .capacity = capacity,                                                                  \
+            .capacity = (u32)capacity,                                                             \
             .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
@@ -105,13 +103,14 @@ PQUEUE_DECL(u32);
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            log_error("attempted to release an arena allocated pqueue");                           \
+            /* TODO: Discard the result, this is a best effort and always safe. */                 \
+            arena_try_resize(self->grow_.arena, self->ptr_, self->capacity * sizeof(T), 0);        \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            alloc_free(self->grow_.alloc, *self);                                                  \
+            alloc_free(self->grow_.alloc, self->ptr_, self->capacity * sizeof(T));                 \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            log_error("attempted to release a fixed buffer pdeque");                               \
+            memset(self->ptr_, 0xDE, self->capacity * sizeof(T));                                  \
             break;                                                                                 \
         }                                                                                          \
         memset(self, 0xDE, sizeof(name##_t));                                                      \
@@ -125,17 +124,27 @@ PQUEUE_DECL(u32);
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            new_ptr = arena_realloc(self->grow_.arena, *self, new_capacity);                       \
+            new_ptr = arena_realloc(                                                               \
+                self->grow_.arena,                                                                 \
+                self->ptr_,                                                                        \
+                self->capacity * sizeof(T),                                                        \
+                new_capacity * sizeof(T)                                                           \
+            );                                                                                     \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            new_ptr = alloc_realloc(self->grow_.alloc, *self, new_capacity);                       \
+            new_ptr = alloc_realloc(                                                               \
+                self->grow_.alloc,                                                                 \
+                self->ptr_,                                                                        \
+                self->capacity * sizeof(T),                                                        \
+                new_capacity * sizeof(T)                                                           \
+            );                                                                                     \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
             panic("fixed buffer deque cannot allocate new buffer");                                \
             break;                                                                                 \
         }                                                                                          \
         if (new_ptr == NULL) return false;                                                         \
-        self->capacity = new_capacity;                                                             \
+        self->capacity = (u32)new_capacity;                                                        \
         self->ptr_ = new_ptr;                                                                      \
         return true;                                                                               \
     }                                                                                              \
@@ -153,7 +162,6 @@ PQUEUE_DECL(u32);
                                                                                                    \
     bool name##_pop(name##_t* self, T* out) {                                                      \
         assert(self != NULL);                                                                      \
-        assert(self->ptr_ != NULL);                                                                \
         if (self->len == 0) {                                                                      \
             return false;                                                                          \
         }                                                                                          \
@@ -164,3 +172,4 @@ PQUEUE_DECL(u32);
     }
 
 #define PQUEUE_IMPL(T, cmp_fn) PQUEUE_IMPL_RAW(T, pqueue_##T, cmp_fn)
+#endif

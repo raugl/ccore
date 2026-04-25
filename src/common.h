@@ -13,6 +13,27 @@
 #include <string.h>
 #include <unistd.h>
 
+#if defined(__clang__)
+#define DIAG_PUSH _Pragma("clang diagnostic push")
+#define DIAG_POP  _Pragma("clang diagnostic pop")
+#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                  \
+    _Pragma("clang diagnostic ignored \"-Wgnu-zero-variadic-macro-arguments\"")
+#define DIAG_IGNORE_GNU_AUTO_TYPE _Pragma("clang diagnostic ignored \"-Wgnu-auto-type\"")
+
+#elif defined(__GNUC__)
+#define DIAG_PUSH _Pragma("GCC diagnostic push")
+#define DIAG_POP  _Pragma("GCC diagnostic pop")
+#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                  \
+    _Pragma("GCC diagnostic ignored \"-Wpedantic\"") // closest equivalent
+#define DIAG_IGNORE_GNU_AUTO_TYPE
+
+#else
+#define DIAG_PUSH
+#define DIAG_POP
+#define DIAG_IGNORE_GNU_ZERO_ARGS
+#define DIAG_IGNORE_GNU_AUTO_TYPE
+#endif
+
 typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;
@@ -36,6 +57,9 @@ typedef __uint128_t u128;
 #define NORETURN     __attribute__((noreturn))
 #define FORCE_INLINE static inline __attribute__((__always_inline__))
 
+DIAG_PUSH
+DIAG_IGNORE_GNU_ZERO_ARGS
+
 // NOTE: This depends on a gcc/clang extension for macro "overloading" based on the length of
 // `__VA_ARGS__`. The only other option would be to use `__VA_OPT__(,)` from C23
 #define INVOKE(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, N, ...) N
@@ -43,6 +67,8 @@ typedef __uint128_t u128;
     INVOKE(0, ##__VA_ARGS__, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_impl)( \
         __VA_ARGS__                                                                                                                                                                                       \
     )
+
+DIAG_POP
 
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -57,7 +83,7 @@ typedef __uint128_t u128;
 #define log_warn(...)  log_impl(LOG_LEVEL_WARN, __VA_ARGS__)
 #define log_error(...) log_impl(LOG_LEVEL_ERROR, __VA_ARGS__)
 
-NORETURN void panic_impl();
+NORETURN void panic_impl(void);
 NORETURN __attribute__((format(printf, 1, 2))) void panic_log_impl(const char* fmt, ...);
 
 typedef enum {

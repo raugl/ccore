@@ -2,7 +2,7 @@
 #include "allocator.h"
 #include "common.h"
 
-// TODO: Add rehash function, and maybe trigger it automatically when there are too many tombstones.
+// TODO: Add rehash function.
 // TODO: Probably add a clone function at some point.
 // TODO: `get_or_put` returns an invalid entry structure, which is used to signify allocation
 // failure. That's pretty bad, maybe change to an out param.
@@ -23,6 +23,8 @@ typedef struct {
     bool is_first;
 } map_iter_t;
 
+bool map_iter_next(map_iter_t* self);
+
 #define HASHMAP_DECL_RAW(K, V, name)                                                               \
     typedef struct {                                                                               \
         meta_t* ptr_;                                                                              \
@@ -31,8 +33,8 @@ typedef struct {
     } name##_t;                                                                                    \
                                                                                                    \
     name##_t name##_init_fixed(void* buffer, usize capacity);                                      \
-    name##_t name##_init_arena(arena_t* arena, usize capacity);                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity);                                \
+    name##_t name##_init_arena(arena_t* arena);                                                    \
+    name##_t name##_init_alloc(allocator_t* alloc);                                                \
     void name##_release(name##_t* self);                                                           \
                                                                                                    \
     bool name##_ensure_capacity(name##_t* self, usize new_capacity);                               \
@@ -53,14 +55,12 @@ typedef struct {
 
 // Specialize here whichever hashmaps you always want available. Instantiation is also possible in a
 // single translation unit for more specialized types.
-HASHMAP_DECL_RAW(u32, u32, map_u32);
+HASHMAP_DECL_RAW(u32, u32, map_u32)
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "hash.h"
 #include "math.h"
 #include "slice.h"
-
-// TODO: Try to pull out as much duplicated computation into non-generics helpers
 
 #define INVALID_IDX               UINT_MAX
 #define LOAD_FACTOR               80
@@ -91,38 +91,6 @@ static u8 take_fingerprint(u64 hash) {
     return hash >> 59;
 }
 
-static usize buffer_size(usize capacity, usize key_sizeof, usize value_sizeof) {
-    usize size = 0;
-    size += capacity * sizeof(meta_t);
-    size = align_forward(size, alignof(max_align_t));
-    size += capacity * key_sizeof;
-    size = align_forward(size, alignof(max_align_t));
-    size += capacity * value_sizeof;
-    size = align_forward(size, alignof(max_align_t));
-    return size;
-}
-
-static u8* alloc_buffer(grow_policy_t grow_, usize capacity, usize key_sizeof, usize value_sizeof) {
-    usize size = buffer_size(capacity, key_sizeof, value_sizeof);
-    if (size == 0) return NULL;
-    u8* ptr;
-
-    switch (grow_.kind) {
-    case GROW_POLICY_ARENA:
-        ptr = arena_alloc(grow_.arena, size * sizeof(u8));
-        break;
-    case GROW_POLICY_ALLOC:
-        ptr = alloc_alloc(grow_.alloc, size * sizeof(u8));
-        break;
-    case GROW_POLICY_FIXED:
-        panic("fixed buffer hashmap cannot allocate new buffer");
-        break;
-    }
-    // FIXME: potentially writing to NULL
-    memset(ptr, METADATA_FREE, capacity * sizeof(meta_t));
-    return ptr;
-}
-
 static u64 hash_slice(const void* key, usize size) {
     const slice_raw_t* slice = key;
     (void)size;
@@ -135,13 +103,24 @@ static bool equal_slice(const void* a, const void* b, usize size) {
     (void)size;
 
     if (slice_a->len != slice_b->len) return false;
-    if (slice_a->ptr == slice_b->ptr) return true;
+    if (slice_a->len == 0 || slice_a->ptr == slice_b->ptr) return true;
     return memcmp(slice_a->ptr, slice_b->ptr, slice_a->len) == 0;
 }
 
 static bool equal_bytes(const void* a, const void* b, usize size) {
     if (a == b) return true;
     return memcmp(a, b, size) == 0;
+}
+
+static usize buffer_size(usize capacity, usize key_sizeof, usize value_sizeof) {
+    usize size = 0;
+    size += capacity * sizeof(meta_t);
+    size = align_forward(size, alignof(max_align_t));
+    size += capacity * key_sizeof;
+    size = align_forward(size, alignof(max_align_t));
+    size += capacity * value_sizeof;
+    size = align_forward(size, alignof(max_align_t));
+    return size;
 }
 
 bool map_iter_next(map_iter_t* self) {
@@ -174,48 +153,27 @@ bool map_iter_next(map_iter_t* self) {
         assert(buffer != NULL);                                                                    \
         assert(is_pow2(capacity));                                                                 \
         assert(is_aligned_ptr(buffer));                                                            \
+        memset(buffer, METADATA_FREE, capacity * sizeof(meta_t));                                  \
                                                                                                    \
         return (name##_t) {                                                                        \
             .ptr_ = buffer,                                                                        \
-            .capacity = capacity,                                                                  \
-            .available = (capacity * LOAD_FACTOR / 100),                                           \
+            .capacity = (u32)capacity,                                                             \
+            .available = (u32)(capacity * LOAD_FACTOR / 100),                                      \
             .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_arena(arena_t* arena, usize capacity) {                                   \
+    name##_t name##_init_arena(arena_t* arena) {                                                   \
         assert(arena != NULL);                                                                     \
-        if (capacity > 0) {                                                                        \
-            capacity = next_pow2_u64(max_usize(MIN_CAPACITY, capacity));                           \
-        }                                                                                          \
-        usize size = buffer_size(capacity, sizeof(K), sizeof(V));                                  \
-        u8* ptr_ = arena_alloc(arena, size * sizeof(u8));                                          \
-        assert(ptr_ != NULL);                                                                      \
-        memset(ptr_, METADATA_FREE, capacity * sizeof(meta_t));                                    \
-                                                                                                   \
         return (name##_t) {                                                                        \
-            .ptr_ = ptr_,                                                                          \
-            .capacity = capacity,                                                                  \
-            .available = (capacity * LOAD_FACTOR / 100),                                           \
             .grow_.arena = arena,                                                                  \
             .grow_.kind = GROW_POLICY_ARENA,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity) {                               \
+    name##_t name##_init_alloc(allocator_t* alloc) {                                               \
         assert(alloc != NULL);                                                                     \
-        if (capacity > 0) {                                                                        \
-            capacity = next_pow2_u64(max_usize(MIN_CAPACITY, capacity));                           \
-        }                                                                                          \
-        usize size = buffer_size(capacity, sizeof(K), sizeof(V));                                  \
-        u8* ptr_ = alloc_alloc(alloc, size * sizeof(u8));                                          \
-        assert(ptr_ != NULL);                                                                      \
-        memset(ptr_, METADATA_FREE, capacity * sizeof(meta_t));                                    \
-                                                                                                   \
         return (name##_t) {                                                                        \
-            .ptr_ = ptr_,                                                                          \
-            .capacity = capacity,                                                                  \
-            .available = (capacity * LOAD_FACTOR / 100),                                           \
             .grow_.alloc = alloc,                                                                  \
             .grow_.kind = GROW_POLICY_ALLOC,                                                       \
         };                                                                                         \
@@ -223,19 +181,18 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                    \
     void name##_release(name##_t* self) {                                                          \
         assert(self != NULL);                                                                      \
-                                                                                                   \
         usize size = buffer_size(self->capacity, sizeof(K), sizeof(V));                            \
-        memset(self->ptr_, 0xDE, size);                                                            \
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            log_error("attempted to release an arena allocated hashmap");                          \
+            /* TODO: Discard the result, this is a best effort and always safe. */                 \
+            arena_try_resize(self->grow_.arena, self->ptr_, size, 0);                              \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            alloc_free_raw(self->grow_.alloc, self->ptr_, size);                                   \
+            alloc_free(self->grow_.alloc, self->ptr_, size);                                       \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            log_error("attempted to release a fixed buffer hashmap");                              \
+            memset(self->ptr_, 0xDE, size);                                                        \
             break;                                                                                 \
         }                                                                                          \
         memset(self, 0xDE, sizeof(name##_t));                                                      \
@@ -268,23 +225,31 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                    \
     bool name##_ensure_capacity(name##_t* self, usize new_capacity) {                              \
         assert(self != NULL);                                                                      \
-        if (self->capacity > new_capacity) return true;                                            \
         new_capacity = next_pow2_u64(max_usize(MIN_CAPACITY, new_capacity));                       \
-        name##_t new_map;                                                                          \
+        if (self->capacity > new_capacity) return true;                                            \
+                                                                                                   \
+        usize size = buffer_size(new_capacity, sizeof(K), sizeof(V));                              \
+        u8* new_ptr;                                                                               \
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            /* TODO: Return `false` on allocation failure */                                       \
-            new_map = name##_init_arena(self->grow_.arena, new_capacity);                          \
+            new_ptr = arena_alloc(self->grow_.arena, size);                                        \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            /* TODO: Return `false` on allocation failure */                                       \
-            new_map = name##_init_alloc(self->grow_.alloc, new_capacity);                          \
+            new_ptr = alloc_alloc(self->grow_.alloc, size);                                        \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            panic("fixed buffer hashmap cannot allocate new buffer");                              \
-            break;                                                                                 \
+            return false;                                                                          \
         }                                                                                          \
+        if (new_ptr == NULL) return false;                                                         \
+        memset(new_ptr, METADATA_FREE, new_capacity * sizeof(meta_t));                             \
+                                                                                                   \
+        name##_t new_map = {                                                                       \
+            .ptr_ = new_ptr,                                                                       \
+            .grow_ = self->grow_,                                                                  \
+            .capacity = (u32)new_capacity,                                                         \
+            .available = (u32)(new_capacity * LOAD_FACTOR / 100),                                  \
+        };                                                                                         \
         if (self->len > 0) {                                                                       \
             K* keys = map_keys(*self, K);                                                          \
             V* values = map_values(*self, K, V);                                                   \
@@ -296,7 +261,6 @@ bool map_iter_next(map_iter_t* self) {
                 if (self->len == new_map.len) break;                                               \
             }                                                                                      \
         }                                                                                          \
-        self->len = 0;                                                                             \
         name##_release(self);                                                                      \
         *self = new_map;                                                                           \
         return true;                                                                               \
@@ -344,7 +308,7 @@ bool map_iter_next(map_iter_t* self) {
                 .existed = true,                                                                   \
             };                                                                                     \
         }                                                                                          \
-        return (map_entry_t) {};                                                                   \
+        return (map_entry_t) { 0 };                                                                \
     }                                                                                              \
                                                                                                    \
     bool name##_contains(name##_t* self, K key) {                                                  \
@@ -386,7 +350,7 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                    \
         if (self->available == 0) {                                                                \
             /* TODO: try to get only instead, if allocation fails */                               \
-            if (!name##_ensure_capacity(self, self->capacity + 1)) return (map_entry_t) {};        \
+            if (!name##_ensure_capacity(self, self->capacity + 1)) return (map_entry_t) { 0 };     \
         }                                                                                          \
         K* keys = map_keys(*self, K);                                                              \
         V* values = map_values(*self, K, V);                                                       \

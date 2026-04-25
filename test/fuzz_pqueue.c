@@ -1,18 +1,18 @@
-#include "../common.h"
-#include "../darray.h"
-#include "../pqueue.h"
-#include "../testing.h"
+#include "common.h"
+#include "darray.h"
+#include "pqueue.h"
+#include "testing.h"
 
 #define MAX_CAPACITY 1024
 #define ITER_COUNT   100
 
-void test_pqueue_build_and_drain(rng_t* rng) {
+static void test_pqueue_build_and_drain(rng_t* rng) {
     BEGIN_TEST("test_pqueue_build_and_drain");
 
     for (usize i = 0; i < ITER_COUNT; ++i) {
         u32 items[MAX_CAPACITY] = { 0 };
-        for (usize i = 0; i < MAX_CAPACITY; ++i) {
-            items[i] = rng_u32(rng);
+        for (usize j = 0; j < MAX_CAPACITY; ++j) {
+            items[j] = rng_u32(rng);
         }
         pqueue_u32_t pqueue = pqueue_u32_from_fixed(items, MAX_CAPACITY);
         u32 curr, prev;
@@ -53,13 +53,13 @@ static usize find_min(darray_u32_t oracle) {
     return min_idx;
 }
 
-void fuzz_pqueue(test_grow_policy_t grow, fuzz_reader_t input) {
+static void fuzz_pqueue(test_grow_policy_t grow, fuzz_reader_t input) {
     BEGIN_TEST("fuzz_pqueue");
     SETUP_TEST(pqueue, pqueue_u32, u32, grow);
 
     u32 oracle_buf[MAX_CAPACITY] = { 0 };
     darray_u32_t oracle = darray_u32_init_fixed(oracle_buf, MAX_CAPACITY);
-    u32 item, actual, expected;
+    u32 item, actual;
     bool has_act, has_exp;
 
     usize it = 0;
@@ -108,7 +108,7 @@ void fuzz_pqueue(test_grow_policy_t grow, fuzz_reader_t input) {
 }
 
 int LLVMFuzzerTestOneInput(const u8* data, usize size) {
-    fuzz_reader_t input = { .ptr = data, .len = size };
+    fuzz_reader_t input = { .ptr = data, .len = (u32)size };
 
     u32 fixed_buf[MAX_CAPACITY] = { 0 };
     u32 arena_buf[MAX_CAPACITY] = { 0 };

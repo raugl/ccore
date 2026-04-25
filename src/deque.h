@@ -2,7 +2,7 @@
 #include "allocator.h"
 #include "common.h"
 
-#define DEQUE_DECL_RAW(T, name, S)                                                                 \
+#define DEQUE_DECL_RAW(T, name)                                                                    \
     typedef struct {                                                                               \
         T* ptr_;                                                                                   \
         grow_policy_t grow_;                                                                       \
@@ -10,8 +10,8 @@
     } name##_t;                                                                                    \
                                                                                                    \
     name##_t name##_init_fixed(T* buffer, usize capacity);                                         \
-    name##_t name##_init_arena(arena_t* arena, usize capacity);                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity);                                \
+    name##_t name##_init_arena(arena_t* arena);                                                    \
+    name##_t name##_init_alloc(allocator_t* alloc);                                                \
     void name##_release(name##_t* self);                                                           \
                                                                                                    \
     bool name##_ensure_capacity(name##_t* self, usize capacity);                                   \
@@ -22,24 +22,15 @@
     bool name##_front(name##_t* self, T* out);                                                     \
     bool name##_back(name##_t* self, T* out);
 
-#define DEQUE_DECL(T) DEQUE_DECL_RAW(T, deque_##T, slice_##T##_t)
+#define DEQUE_DECL(T) DEQUE_DECL_RAW(T, deque_##T)
 
 #define deque_at(self, idx)                                                                        \
     (self).ptr_[(validate_idx((idx), (self).len) + (self).head) & ((self).capacity - 1)]
 
-DEQUE_DECL(u8);
-DEQUE_DECL(u16);
-DEQUE_DECL(u32);
-DEQUE_DECL(u64);
-
-DEQUE_DECL(i8);
-DEQUE_DECL(i16);
-DEQUE_DECL(i32);
-DEQUE_DECL(i64);
-
-DEQUE_DECL(f32);
-DEQUE_DECL(f64);
-DEQUE_DECL(bool);
+DEQUE_DECL(u8)
+DEQUE_DECL(u32)
+DEQUE_DECL(u64)
+DEQUE_DECL(f32)
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
@@ -52,32 +43,22 @@ DEQUE_DECL(bool);
                                                                                                    \
         return (name##_t) {                                                                        \
             .ptr_ = buffer,                                                                        \
-            .capacity = capacity,                                                                  \
+            .capacity = (u32)capacity,                                                             \
             .grow_.kind = GROW_POLICY_FIXED,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_arena(arena_t* arena, usize capacity) {                                   \
+    name##_t name##_init_arena(arena_t* arena) {                                                   \
         assert(arena != NULL);                                                                     \
-        if (capacity > 0) {                                                                        \
-            capacity = next_pow2_u64(max_usize(MIN_CAPACITY, capacity));                           \
-        }                                                                                          \
         return (name##_t) {                                                                        \
-            .ptr_ = arena_alloc(arena, capacity * sizeof(T)),                                      \
-            .capacity = capacity,                                                                  \
             .grow_.arena = arena,                                                                  \
             .grow_.kind = GROW_POLICY_ARENA,                                                       \
         };                                                                                         \
     }                                                                                              \
                                                                                                    \
-    name##_t name##_init_alloc(allocator_t* alloc, usize capacity) {                               \
+    name##_t name##_init_alloc(allocator_t* alloc) {                                               \
         assert(alloc != NULL);                                                                     \
-        if (capacity > 0) {                                                                        \
-            capacity = next_pow2_u64(max_usize(MIN_CAPACITY, capacity));                           \
-        }                                                                                          \
         return (name##_t) {                                                                        \
-            .ptr_ = alloc_alloc(alloc, capacity * sizeof(T)),                                      \
-            .capacity = capacity,                                                                  \
             .grow_.alloc = alloc,                                                                  \
             .grow_.kind = GROW_POLICY_ALLOC,                                                       \
         };                                                                                         \
@@ -88,13 +69,14 @@ DEQUE_DECL(bool);
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
         case GROW_POLICY_ARENA:                                                                    \
-            log_error("attempted to release an arena allocated deque");                            \
+            /* TODO: Discard the result, this is a best effort and always safe. */                 \
+            arena_try_resize(self->grow_.arena, self->ptr_, self->capacity * sizeof(T), 0);        \
             break;                                                                                 \
         case GROW_POLICY_ALLOC:                                                                    \
-            alloc_free(self->grow_.alloc, *self);                                                  \
+            alloc_free(self->grow_.alloc, self->ptr_, self->capacity * sizeof(T));                 \
             break;                                                                                 \
         case GROW_POLICY_FIXED:                                                                    \
-            log_error("attempted to release a fixed buffer deque");                                \
+            memset(self->ptr_, 0xDE, self->capacity * sizeof(T));                                  \
             break;                                                                                 \
         }                                                                                          \
         memset(self, 0, sizeof(name##_t));                                                         \
@@ -120,7 +102,7 @@ DEQUE_DECL(bool);
             /* bb].....[aaaaaaa => ___.....[aaaaaa|bb]............. */                             \
             /* bbbb][aaaaaaaaaa => _____[aaaaaaaaa|bbbb]........... */                             \
             u32 old_head = self->head;                                                             \
-            self->head = new_capacity - right_len;                                                 \
+            self->head = (u32)new_capacity - right_len;                                            \
             memcpy(new_ptr + self->head, self->ptr_ + old_head, right_len * sizeof(T));            \
         } else {                                                                                   \
             /* bbbbbbb]....[aaa => bbbbbbb]....____............[aaa */                             \
@@ -133,29 +115,33 @@ DEQUE_DECL(bool);
         assert(self != NULL);                                                                      \
         if (self->capacity >= new_capacity) return true;                                           \
         new_capacity = next_pow2_u64(max_usize(MIN_CAPACITY, new_capacity));                       \
-        T* new_ptr = self->ptr_;                                                                   \
+        T* new_ptr;                                                                                \
                                                                                                    \
         switch (self->grow_.kind) {                                                                \
-        case GROW_POLICY_ARENA:                                                                    \
-            if (!arena_try_extend(self->grow_.arena, *self, new_capacity)) {                       \
-                new_ptr = arena_alloc(self->grow_.arena, new_capacity * sizeof(T));                \
-                if (new_ptr == NULL) return false;                                                 \
-            }                                                                                      \
-            break;                                                                                 \
-        case GROW_POLICY_ALLOC:                                                                    \
-            new_ptr = alloc_alloc(self->grow_.alloc, new_capacity * sizeof(T));                    \
-            if (new_ptr == NULL) return false;                                                     \
-            break;                                                                                 \
-        case GROW_POLICY_FIXED:                                                                    \
-            return false; /* NOTE: Fixed buffer cannot grow_ */                                    \
+        case GROW_POLICY_ARENA: {                                                                  \
+            bool grew_in_place = arena_try_resize(                                                 \
+                self->grow_.arena,                                                                 \
+                self->ptr_,                                                                        \
+                self->capacity * sizeof(T),                                                        \
+                new_capacity * sizeof(T)                                                           \
+            );                                                                                     \
+            new_ptr = grew_in_place ? self->ptr_                                                   \
+                                    : arena_alloc(self->grow_.arena, new_capacity * sizeof(T));    \
             break;                                                                                 \
         }                                                                                          \
+        case GROW_POLICY_ALLOC:                                                                    \
+            new_ptr = alloc_alloc(self->grow_.alloc, new_capacity * sizeof(T));                    \
+            break;                                                                                 \
+        case GROW_POLICY_FIXED:                                                                    \
+            return false;                                                                          \
+        }                                                                                          \
+        if (new_ptr == NULL) return false;                                                         \
         name##_copy_buffer(self, new_ptr, new_capacity);                                           \
                                                                                                    \
         if (self->grow_.kind == GROW_POLICY_ALLOC) {                                               \
-            alloc_free(self->grow_.alloc, *self);                                                  \
+            alloc_free(self->grow_.alloc, self->ptr_, self->capacity * sizeof(T));                 \
         }                                                                                          \
-        self->capacity = new_capacity;                                                             \
+        self->capacity = (u32)new_capacity;                                                        \
         self->ptr_ = new_ptr;                                                                      \
         return true;                                                                               \
     }                                                                                              \
@@ -183,26 +169,28 @@ DEQUE_DECL(bool);
         return true;                                                                               \
     }                                                                                              \
                                                                                                    \
-    T name##_pop_front(name##_t* self) {                                                           \
+    bool name##_pop_front(name##_t* self, T* out) {                                                \
         assert(self != NULL);                                                                      \
-        assert(self->len > 0);                                                                     \
-        assert(self->ptr_ != NULL);                                                                \
-                                                                                                   \
+        if (self->len == 0) {                                                                      \
+            return false;                                                                          \
+        }                                                                                          \
+        if (out != NULL) *out = self->ptr_[self->head];                                            \
         const u32 mask = self->capacity - 1;                                                       \
-        const u32 old_head = self->head;                                                           \
         self->head = (self->head + 1) & mask;                                                      \
         self->len--;                                                                               \
-        return self->ptr_[old_head];                                                               \
+        return true;                                                                               \
     }                                                                                              \
                                                                                                    \
-    T name##_pop_back(name##_t* self) {                                                            \
+    bool name##_pop_back(name##_t* self, T* out) {                                                 \
         assert(self != NULL);                                                                      \
-        assert(self->len > 0);                                                                     \
-        assert(self->ptr_ != NULL);                                                                \
-                                                                                                   \
+        if (self->len == 0) {                                                                      \
+            return false;                                                                          \
+        }                                                                                          \
         const u32 mask = self->capacity - 1;                                                       \
-        return self->ptr_[(self->head + --self->len) & mask];                                      \
+        self->len--;                                                                               \
+        if (out != NULL) *out = self->ptr_[(self->head + self->len) & mask];                       \
+        return true;                                                                               \
     }
 
-#define DEQUE_IMPL(T) DEQUE_IMPL_RAW(T, deque_##T, slice_##T##_t)
+#define DEQUE_IMPL(T) DEQUE_IMPL_RAW(T, deque_##T)
 #endif

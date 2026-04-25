@@ -11,22 +11,12 @@
 
 #define SLICE_DECL(T) SLICE_DECL_RAW(T, slice_##T)
 
-SLICE_DECL(u8);
-SLICE_DECL(u16);
-SLICE_DECL(u32);
-SLICE_DECL(u64);
-
-SLICE_DECL(i8);
-SLICE_DECL(i16);
-SLICE_DECL(i32);
-SLICE_DECL(i64);
-
-SLICE_DECL(f32);
-SLICE_DECL(f64);
-SLICE_DECL(bool);
-
-SLICE_DECL_RAW(const char, string);
-SLICE_DECL_RAW(void, slice_raw);
+SLICE_DECL(u8)
+SLICE_DECL(u32)
+SLICE_DECL(u64)
+SLICE_DECL(f32)
+SLICE_DECL_RAW(const char, string)
+SLICE_DECL_RAW(void, slice_raw)
 
 #define cstr(string)                                                                               \
     (string_t) {                                                                                   \

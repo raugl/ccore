@@ -27,7 +27,7 @@ static rng_t rng_seed(u64 seed) {
     return seed;
 }
 
-static rng_t rng_seed_entropy() {
+static rng_t rng_seed_entropy(void) {
     rng_t state;
     os_get_random(&state, sizeof(state));
     return state;
@@ -38,7 +38,7 @@ static u64 w1rand(rng_t* state) {
     const u64 c = 0xd07ebc63274654c7ull;
     *state += c;
     u128 t = (u128)*state * (*state ^ c);
-    return (t >> 64) ^ t;
+    return (u64)(t ^ (t >> 64));
 }
 
 static u8 rng_u8(rng_t* state) {
@@ -60,16 +60,16 @@ static u64 rng_u64(rng_t* state) {
 // Generates a number in the range [0, 1)
 // A float can represent 24 bits of information
 static f32 rng_f32(rng_t* state) {
-    return (w1rand(state) >> (64 - 24)) * 0x1.0p-24;
+    return (f32)((w1rand(state) >> 40) * 0x1.0p-24);
 }
 
 // Generates a number in the range [0, 1)
 // A double can represent 53 bits of information
 static f64 rng_f64(rng_t* state) {
-    return (w1rand(state) >> (64 - 53)) * 0x1.0p-53;
+    return (w1rand(state) >> 11) * 0x1.0p-53;
 }
 
-void rng_bytes(rng_t* state, void* out, usize size) {
+static void rng_bytes(rng_t* state, void* out, usize size) {
     usize i = 0;
     for (; i <= size - sizeof(u64); i += sizeof(u64)) {
         u64 x = w1rand(state);

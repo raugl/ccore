@@ -1,7 +1,7 @@
-#include "../common.h"
-#include "../darray.h"
-#include "../deque.h"
-#include "../testing.h"
+#include "common.h"
+#include "darray.h"
+#include "deque.h"
+#include "testing.h"
 
 #define MAX_CAPACITY 256
 
@@ -22,7 +22,7 @@ static action_kind_t fuzz_read_weighted_action(fuzz_reader_t* input) {
     unreachable;
 }
 
-void fuzz_deque(test_grow_policy_t grow, rng_t* rng, fuzz_reader_t input) {
+static void fuzz_deque(test_grow_policy_t grow, rng_t* rng, fuzz_reader_t input) {
     BEGIN_TEST("fuzz_deque");
     SETUP_TEST(deque, deque_u32, u32, grow);
 
@@ -88,7 +88,7 @@ void fuzz_deque(test_grow_policy_t grow, rng_t* rng, fuzz_reader_t input) {
 }
 
 int LLVMFuzzerTestOneInput(const u8* data, usize size) {
-    fuzz_reader_t input = { .ptr = data, .len = size };
+    fuzz_reader_t input = { .ptr = data, .len = (u32)size };
     rng_t rng = rng_seed(fuzz_read_u64(&input));
 
     u32 fixed_buf[MAX_CAPACITY] = { 0 };

@@ -43,7 +43,7 @@ FORCE_INLINE u64 read64(const u8* p) {
     return val;
 }
 
-u64 rapidhash(const void* key, usize size, u64 seed, const u64* secret) {
+static u64 rapidhash(const void* key, usize size, u64 seed, const u64* secret) {
     const u8* p = (const u8*)key;
     seed ^= mix(seed ^ secret[2], secret[1]);
     u64 a = 0, b = 0;

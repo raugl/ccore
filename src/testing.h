@@ -4,6 +4,8 @@
 #include "common.h"
 #include "random.h"
 
+int LLVMFuzzerTestOneInput(const u8* data, usize size);
+
 typedef struct {
     union {
         struct {
@@ -29,10 +31,10 @@ typedef struct {
         var = name##_init_fixed(grow.buffer, grow.size / sizeof(T));                               \
         break;                                                                                     \
     case GROW_POLICY_ARENA:                                                                        \
-        var = name##_init_arena(grow.arena, 0);                                                    \
+        var = name##_init_arena(grow.arena);                                                       \
         break;                                                                                     \
     case GROW_POLICY_ALLOC:                                                                        \
-        var = name##_init_alloc(grow.alloc, 0);                                                    \
+        var = name##_init_alloc(grow.alloc);                                                       \
         break;                                                                                     \
     }
 
@@ -68,8 +70,12 @@ typedef struct {
 
 #define assert_equal_str(a, b)                                                                     \
     do {                                                                                           \
+        DIAG_PUSH;                                                                                 \
+        DIAG_IGNORE_GNU_AUTO_TYPE;                                                                 \
         __auto_type test_tmp_a_ = (a);                                                             \
         __auto_type test_tmp_b_ = (b);                                                             \
+        DIAG_POP;                                                                                  \
+                                                                                                   \
         if (test_tmp_a_.len != test_tmp_b_.len) {                                                  \
             panic(                                                                                 \
                 "assertion failed: " #a ".len (%zu) != " #b ".len (%zu)",                          \
@@ -102,7 +108,7 @@ static bool fuzz_reader_is_empty(fuzz_reader_t reader) {
 static inline void fuzz_reader_impl(fuzz_reader_t* reader, void* dest, usize len) {
     usize avail = min_usize(reader->len - reader->idx, len);
     memcpy(dest, reader->ptr + reader->idx, avail);
-    memset(dest + avail, 0, len - avail);
+    memset((u8*)dest + avail, 0, len - avail);
     reader->idx += avail;
 }
 

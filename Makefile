@@ -1,14 +1,19 @@
 CC := clang
 OPT := -g -O1
-CFLAGS := -std=c11 -MMD -MP  \
+CFLAGS := -std=c11 -Isrc -MMD -MP  \
 	-Wall -Wextra -Wpedantic \
 	-Wshadow -Wundef -Wcast-qual \
 	-Wformat=2 -Wstrict-overflow=5 \
 	-Wconversion -Wsign-conversion -Wdouble-promotion \
-	-Wswitch-enum -Wswitch-default -Wimplicit-fallthrough \
-	-Wredundant-decls -Wmissing-prototypes -Wstrict-prototypes -Wold-style-definition \
+	-Wswitch-enum -Wimplicit-fallthrough \
+	-Wredundant-decls -Wmissing-prototypes -Wstrict-prototypes \
 	-Wwrite-strings -Wnull-dereference \
 	-Wno-unused-function
+
+# FIXME: The .d dependency files are being placed in the source tree
+# TODO: Currently it's impossible to pass target specific options, especially TEST definitions
+# TODO: I think that $(OPT) is not being passed along
+# TODO: Split the warning flags
 
 BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj
@@ -66,7 +71,7 @@ fuzz-%: $(BUILD_DIR)/fuzz_%
 
 $(BUILD_DIR)/fuzz_%: test/fuzz_%.o $(OBJ)
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(OPT) -fsanitize=fuzzer,address,undefined-behavior -o $@ $^
+	@$(CC) $(CFLAGS) $(OPT) -fsanitize=fuzzer,address,undefined -o $@ $^
 	@printf "[$(CC)] Built target $@\n"
 
 .PHONY: check-fuzz-layout

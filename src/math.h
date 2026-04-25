@@ -20,7 +20,7 @@
     static type max_##type(type a, type b) {                                                       \
         return (a > b) ? a : b;                                                                    \
     }
-MATH_TYPE_DECLS(X);
+MATH_TYPE_DECLS(X)
 
 static bool is_pow2(usize num) {
     return (num & (num - 1)) == 0;
@@ -28,12 +28,12 @@ static bool is_pow2(usize num) {
 
 static u16 log2_u32(u32 num) {
     assert(num != 0);
-    return 31 - __builtin_clz(num);
+    return (u16)(31 - __builtin_clz(num));
 }
 
 static u16 log2_u64(u64 num) {
     assert(num != 0);
-    return 63 - __builtin_clz(num);
+    return (u16)(63 - __builtin_clzll(num));
 }
 
 static u16 log2_ceil_u32(u32 num) {
@@ -58,22 +58,22 @@ static bool is_aligned_ptr(void* ptr) {
 
 static u32 next_pow2_u32(u32 num) {
     if (num <= 1) return 1;
-    return 1ULL << (32 - __builtin_clz(num - 1));
+    return 1u << (32 - __builtin_clz(num - 1));
 }
 
 static u64 next_pow2_u64(u64 num) {
     if (num <= 1) return 1;
-    return 1ULL << (64 - __builtin_clzll(num - 1));
+    return 1ull << (64 - __builtin_clzll(num - 1));
 }
 
 static u32 prev_pow2_u32(u32 num) {
     if (num <= 1) return 0;
-    return 1ULL << (31 - __builtin_clz(num - 1));
+    return 1u << (31 - __builtin_clz(num - 1));
 }
 
 static u64 prev_pow2_u64(u64 num) {
     if (num <= 1) return 0;
-    return 1ULL << (63 - __builtin_clzll(num - 1));
+    return 1ull << (63 - __builtin_clzll(num - 1));
 }
 
 static uintptr_t align_forward(uintptr_t address, uintptr_t align) {

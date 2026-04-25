@@ -1,12 +1,12 @@
 #define GENERICS_IMPLEMENTATION
-#include "../common.h"
-#include "../testing.h"
-#include "../hashmap.h"
+#include "common.h"
+#include "testing.h"
+#include "hashmap.h"
 
 // #define MUNIT_ENABLE_ASSERT_ALIASES
 // #include "../vendor/munit/munit.h"
 
-void basic_usage(void) {
+static void basic_usage(void) {
     //     allocator_t alloc = {};
     //     map_u32_t map = map_u32_init_alloc(&alloc, 0);
     // cleanup:
