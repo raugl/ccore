@@ -42,15 +42,15 @@ static u64 w1rand(rng_t* state) {
 }
 
 static u8 rng_u8(rng_t* state) {
-    return w1rand(state) >> (64 - 8);
+    return (u8)(w1rand(state) >> (64 - 8));
 }
 
 static u16 rng_u16(rng_t* state) {
-    return w1rand(state) >> (64 - 16);
+    return (u16)(w1rand(state) >> (64 - 16));
 }
 
 static u32 rng_u32(rng_t* state) {
-    return w1rand(state) >> (64 - 32);
+    return (u32)(w1rand(state) >> (64 - 32));
 }
 
 static u64 rng_u64(rng_t* state) {
@@ -60,13 +60,13 @@ static u64 rng_u64(rng_t* state) {
 // Generates a number in the range [0, 1)
 // A float can represent 24 bits of information
 static f32 rng_f32(rng_t* state) {
-    return (f32)((w1rand(state) >> 40) * 0x1.0p-24);
+    return (f32)(w1rand(state) >> 40) * 0x1.0p-24f;
 }
 
 // Generates a number in the range [0, 1)
 // A double can represent 53 bits of information
 static f64 rng_f64(rng_t* state) {
-    return (w1rand(state) >> 11) * 0x1.0p-53;
+    return (f64)(w1rand(state) >> 11) * 0x1.0p-53;
 }
 
 static void rng_bytes(rng_t* state, void* out, usize size) {
@@ -84,7 +84,7 @@ static void rng_bytes(rng_t* state, void* out, usize size) {
 // Generates a number in the range [start, end)
 static u64 rng_range_int(rng_t* state, u64 start, u64 end) {
     u128 mul = w1rand(state) * (end - start);
-    return start + (mul >> 64);
+    return start + (u64)(mul >> 64);
 }
 
 // Generates a number in the range [start, end)

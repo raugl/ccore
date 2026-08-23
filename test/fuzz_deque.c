@@ -5,6 +5,7 @@
 
 #define MAX_CAPACITY 256
 
+// TODO: Add push many variations
 typedef enum {
     ACTION_PUSH_BACK,
     ACTION_PUSH_FRONT,

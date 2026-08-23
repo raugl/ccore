@@ -1,5 +1,7 @@
 #pragma once
-#define _POSIX_C_SOURCE 200809L
+#ifndef _POSIX_C_SOURCE
+#    define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <assert.h>
 #include <limits.h>
@@ -16,14 +18,14 @@
 #if defined(__clang__)
 #define DIAG_PUSH _Pragma("clang diagnostic push")
 #define DIAG_POP  _Pragma("clang diagnostic pop")
-#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                  \
+#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                   \
     _Pragma("clang diagnostic ignored \"-Wgnu-zero-variadic-macro-arguments\"")
 #define DIAG_IGNORE_GNU_AUTO_TYPE _Pragma("clang diagnostic ignored \"-Wgnu-auto-type\"")
 
 #elif defined(__GNUC__)
 #define DIAG_PUSH _Pragma("GCC diagnostic push")
 #define DIAG_POP  _Pragma("GCC diagnostic pop")
-#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                  \
+#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                   \
     _Pragma("GCC diagnostic ignored \"-Wpedantic\"") // closest equivalent
 #define DIAG_IGNORE_GNU_AUTO_TYPE
 
@@ -51,11 +53,16 @@ typedef double f64;
 typedef long double f80;
 typedef __uint128_t u128;
 
+typedef const char* cstring;
+
 // Useful marker annotations around mostly pointers
 #define OUT
 #define NULLABLE
-#define NORETURN     __attribute__((noreturn))
-#define FORCE_INLINE static inline __attribute__((__always_inline__))
+#define NORETURN                           __attribute__((noreturn))
+#define PACKED                             __attribute__((__packed__))
+#define SCANF_FORMAT(fmt_idx, vaargs_idx)  __attribute__((format(scanf, fmt_idx, vaargs_idx)))
+#define PRINTF_FORMAT(fmt_idx, vaargs_idx) __attribute__((format(printf, fmt_idx, vaargs_idx)))
+#define FORCE_INLINE                       static inline __attribute__((__always_inline__))
 
 DIAG_PUSH
 DIAG_IGNORE_GNU_ZERO_ARGS
@@ -70,12 +77,10 @@ DIAG_IGNORE_GNU_ZERO_ARGS
 
 DIAG_POP
 
-#define likely(x)   __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#define unreachable __builtin_unreachable()
-
-#define for_each(type, item, items)                                                                \
-    for (type* item = (items).ptr; item < (items).ptr + (items).len; ++item)
+#define likely(x)      __builtin_expect(!!(x), 1)
+#define unlikely(x)    __builtin_expect(!!(x), 0)
+#define unreachable()  __builtin_unreachable()
+#define bit_cast(T, x) (*(T*)(&(x)))
 
 #define log_trace(...) log_impl(LOG_LEVEL_TRACE, __VA_ARGS__)
 #define log_debug(...) log_impl(LOG_LEVEL_DEBUG, __VA_ARGS__)
@@ -84,7 +89,7 @@ DIAG_POP
 #define log_error(...) log_impl(LOG_LEVEL_ERROR, __VA_ARGS__)
 
 NORETURN void panic_impl(void);
-NORETURN __attribute__((format(printf, 1, 2))) void panic_log_impl(const char* fmt, ...);
+NORETURN PRINTF_FORMAT(1, 2) void panic_log_impl(const char* fmt, ...);
 
 typedef enum {
     LOG_LEVEL_TRACE,
@@ -94,11 +99,14 @@ typedef enum {
     LOG_LEVEL_ERROR,
 } log_level_t;
 
-__attribute__((format(printf, 2, 3))) void log_impl(log_level_t level, const char* fmt, ...);
+extern log_level_t core_log_level;
 
-#define array_front(self)   array_at((self), 0)
-#define array_back(self)    array_at((self), (self).len - 1)
+PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, const char* fmt, ...);
+
+// #define array_front(self)   array_at((self), 0)
+// #define array_back(self)    array_at((self), (self).len - 1)
 #define array_at(self, idx) (self).ptr[validate_idx((idx), (self).len)]
+#define array_len(arr)      sizeof((arr)) / sizeof((arr)[0])
 
 static inline usize validate_idx(usize idx, usize len) {
     if (idx < len) return idx;

@@ -1,3 +1,4 @@
+#pragma once
 #include "common.h"
 
 // Sets the global seed using OS entropy. This is used when hashing without an explicit seed.

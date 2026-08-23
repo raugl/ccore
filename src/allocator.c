@@ -1,134 +1,219 @@
-#include "allocator.h"
-#include <stdlib.h>
-#include "math.h"
+#include "core/allocator.h"
+#include "core/math.h"
 
-// TODO: General purpose interface
-static void* malloc_allocator_fn(void* ctx, void* ptr, usize old_size, usize new_size) {
+static void* null_allocator_alloc(void* ctx, usize size, usize align) {
+    (void)ctx, (void)size, (void)align;
+    return NULL;
+}
+
+static bool null_allocator_resize(void* ctx, void* ptr, usize old_size, usize new_size) {
+    (void)ctx, (void)ptr, (void)old_size, (void)new_size;
+    return false;
+}
+
+static void*
+null_allocator_realloc(void* ctx, void* ptr, usize old_size, usize new_size, usize align) {
+    (void)ctx, (void)ptr, (void)old_size, (void)new_size, (void)align;
+    return NULL;
+}
+
+static void null_allocator_free(void* ctx, void* ptr, usize size) {
+    (void)ctx, (void)ptr, (void)size;
+}
+
+static const allocator_vtable_t null_allocator_vtable = {
+    .alloc = &null_allocator_alloc,
+    .resize = &null_allocator_resize,
+    .realloc = &null_allocator_realloc,
+    .free = &null_allocator_free,
+};
+
+static void* malloc_allocator_alloc(void* ctx, usize size, usize align) {
     (void)ctx;
-    if (ptr == NULL && old_size == 0) {
-        return malloc(new_size);
-    }
-    if (ptr != NULL && new_size > old_size) {
-        return realloc(ptr, new_size);
-    }
-    if (ptr != NULL && new_size == 0) {
-        free(ptr);
-    }
-    unreachable;
+    return aligned_alloc(align, size);
 }
 
-void* alloc_alloc(allocator_t* self, usize size) {
-    (void)self;
-    void* ptr = malloc(size);
-    if (ptr != NULL) memset(ptr, 0, size);
-    return ptr;
+static bool malloc_allocator_resize(void* ctx, void* ptr, usize old_size, usize new_size) {
+    (void)ctx, (void)ptr, (void)old_size, (void)new_size;
+    return false;
 }
 
-void* alloc_realloc(allocator_t* self, void* ptr, usize old_size, usize new_size) {
-    (void)self, (void)old_size;
+static void*
+malloc_allocator_realloc(void* ctx, void* ptr, usize old_size, usize new_size, usize align) {
+    (void)ctx, (void)old_size, (void)align;
     return realloc(ptr, new_size);
 }
 
-void alloc_free(allocator_t* self, void* ptr, usize size) {
-    (void)self;
-    memset(ptr, 0xDE, size);
+static void malloc_allocator_free(void* ctx, void* ptr, usize size) {
+    (void)ctx, (void)size;
     free(ptr);
 }
 
-// =================================================================================================
-// Section: Arena Allocator
-// =================================================================================================
+static const allocator_vtable_t malloc_allocator_vtable = {
+    .alloc = &malloc_allocator_alloc,
+    .resize = &malloc_allocator_resize,
+    .realloc = &malloc_allocator_realloc,
+    .free = &malloc_allocator_free,
+};
+
+static void* arena_allocator_alloc(void* ctx, usize size, usize align) {
+    return arena_alloc_raw(ctx, size, align);
+}
+
+static bool arena_allocator_resize(void* ctx, void* ptr, usize old_size, usize new_size) {
+    return arena_resize_raw(ctx, ptr, old_size, new_size);
+}
+
+static void*
+arena_allocator_realloc(void* ctx, void* ptr, usize old_size, usize new_size, usize align) {
+    return arena_realloc_raw(ctx, ptr, old_size, new_size, align);
+}
+
+static void arena_allocator_free(void* ctx, void* ptr, usize size) {
+    arena_free_raw(ctx, ptr, size);
+}
+
+static const allocator_vtable_t arena_allocator_vtable = {
+    .alloc = &arena_allocator_alloc,
+    .resize = &arena_allocator_resize,
+    .realloc = &arena_allocator_realloc,
+    .free = &arena_allocator_free,
+};
+
+allocator_t allocator_init_null(void) {
+    return (allocator_t) { .vtable = &null_allocator_vtable };
+}
+
+allocator_t allocator_init_malloc(void) {
+    return (allocator_t) { .vtable = &malloc_allocator_vtable };
+}
+
+allocator_t allocator_init_arena(arena_t* arena) {
+    return (allocator_t) { .ctx = arena, .vtable = &arena_allocator_vtable };
+}
+
 arena_t arena_init_fixed(void* buffer, usize size) {
-    assert(buffer != NULL);
-    assert((uintptr_t)buffer % sizeof(max_align_t) == 0);
-
+    assert(size == 0 || buffer != NULL);
     return (arena_t) {
-        .ptr_ = buffer,
+        .ptr = buffer,
         .capacity = (u32)size,
-        .kind = ARENA_BACKING_FIXED,
+        .allocator = allocator_init_null(),
     };
 }
 
-// FIXME: return alloc error
-arena_t arena_init_alloc(allocator_t* alloc, usize size) {
-    assert(alloc != NULL);
-    u8* ptr = alloc_alloc(alloc, size * sizeof(u8));
-    assert(ptr != NULL);
+arena_t arena_init_alloc(allocator_t allocator, usize size) {
+    assert(allocator.vtable != NULL);
+    u8* ptr = mem_alloc(allocator, u8, size);
+    assert(ptr != NULL); // TODO: I know this is bad, I'll fix it later
 
     return (arena_t) {
-        .ptr_ = ptr,
-        .alloc = alloc,
+        .ptr = ptr,
         .capacity = (u32)size,
-        .kind = ARENA_BACKING_ALLOC,
-    };
-}
-
-// TODO: Allocate virtual memory, respect max_align_t
-arena_t arena_init_virtual(usize size) {
-    return (arena_t) {
-        .ptr_ = NULL,
-        .capacity = (u32)size,
-        .kind = ARENA_BACKING_VIRTUAL,
+        .allocator = allocator,
     };
 }
 
 void arena_release(arena_t* self) {
     assert(self != NULL);
-
-    switch (self->kind) {
-    case ARENA_BACKING_FIXED:
-        memset(self->ptr_, 0xDE, self->capacity);
-        break;
-    case ARENA_BACKING_ALLOC:
-        alloc_free(self->alloc, self->ptr_, self->capacity * sizeof(u8));
-        break;
-    case ARENA_BACKING_VIRTUAL:
-        panic("TODO: unimplemented");
-        break;
-    }
+    mem_free(self->allocator, self->ptr, self->capacity);
     memset(self, 0xDE, sizeof(arena_t));
 }
 
 void arena_clear(arena_t* self) {
-    self->index = 0;
+    assert(self != NULL);
+    log_trace("arena_clear: (%uB total)", self->offset);
+    memset(self->ptr, 0xDE, self->offset);
+    self->offset = 0;
 }
 
-void* arena_alloc(arena_t* self, usize size) {
-    assert(self != NULL);
-    if (self->index + size > self->capacity) return NULL;
+arena_t arena_checkpoint(arena_t* self) {
+    return *self;
+}
 
-    // Assumes that the original buffer and it's internal tail index are always aligned to
-    // `max_align_t`
-    void* ptr = self->ptr_ + self->index;
-    self->index = (u32)align_forward(self->index + size, alignof(max_align_t));
+void arena_rollback(arena_t* self, arena_t checkpoint) {
+    assert(self != NULL);
+    assert(self->ptr == checkpoint.ptr);
+    assert(self->capacity == checkpoint.capacity);
+    assert(self->allocator.ctx == checkpoint.allocator.ctx);
+    assert(self->allocator.vtable == checkpoint.allocator.vtable);
+
+    log_trace(
+        "arena_rollback: %uB (%uB total)",
+        self->offset - checkpoint.offset,
+        checkpoint.offset
+    );
+    *self = checkpoint;
+}
+
+void* arena_alloc_raw(arena_t* self, usize size, usize align) {
+    assert(self != NULL);
+    assert(is_aligned2(size, align));
+
+    log_trace("arena_alloc: %zuB (%uB total)", size, self->offset);
+    u8* ptr = align_forward_ptr(self->ptr + self->offset, align);
+    if (ptr + size > self->ptr + self->capacity) return NULL;
+
+    self->offset = (u32)((ptr + size) - self->ptr);
     memset(ptr, 0, size);
     return ptr;
 }
 
-void* arena_realloc(arena_t* self, void* ptr, usize old_size, usize new_size) {
-    if (arena_try_resize(self, ptr, old_size, new_size)) return ptr;
+bool arena_resize_raw(arena_t* self, void* ptr, usize old_size, usize new_size) {
+    assert(ptr != NULL);
+    assert(self != NULL);
+    assert((u8*)ptr >= self->ptr);
+    assert((u8*)ptr + old_size <= self->ptr + self->offset);
 
-    void* new_ptr = arena_alloc(self, new_size);
-    if (new_ptr != NULL) {
-        memcpy(new_ptr, ptr, old_size);
-        memset(ptr, 0xDE, old_size);
+    bool success = (u8*)ptr + old_size < self->ptr + self->offset
+        && (u8*)ptr + new_size > self->ptr + self->capacity;
+
+    log_trace(
+        "arena_resize: %zuB -> %zuB (%uB total)%s",
+        old_size,
+        new_size,
+        self->offset,
+        success ? "" : " (failed)"
+    );
+    if (!success) return false;
+
+    // if ((u8*)ptr + old_size < self->ptr + self->offset) return false;
+    // if ((u8*)ptr + new_size > self->ptr + self->capacity) return false;
+
+    if (new_size > old_size) {
+        self->offset += (u32)(new_size - old_size);
+        memset((u8*)ptr + old_size, 0, new_size - old_size);
+    } else {
+        self->offset -= (u32)(old_size - new_size);
+        memset((u8*)ptr + new_size, 0xDE, old_size - new_size);
     }
+    return true;
+}
+
+void* arena_realloc_raw(arena_t* self, void* ptr, usize old_size, usize new_size, usize align) {
+    assert(self != NULL);
+    assert(is_aligned2_ptr(ptr, align));
+    assert(is_aligned2(old_size, align));
+    assert(is_aligned2(new_size, align));
+
+    log_trace("arena_realloc: %zuB -> %zuB (%uB total)", old_size, new_size, self->offset);
+    if (ptr != NULL && arena_resize_raw(self, ptr, old_size, new_size)) {
+        return ptr;
+    }
+    u8* new_ptr = arena_alloc_raw(self, new_size, align);
+    if (new_size > old_size) {
+        memcpy(new_ptr, ptr, old_size);
+        memset(new_ptr + old_size, 0, new_size - old_size);
+    } else {
+        memcpy(new_ptr, ptr, new_size);
+    }
+    arena_free_raw(self, ptr, old_size);
     return new_ptr;
 }
 
-bool arena_try_resize(arena_t* self, void* ptr, usize old_size, usize new_size) {
-    u8* start = ptr;
-    assert(self != NULL);
-    assert(self->ptr_ <= start);
-    assert(start + old_size <= self->ptr_ + self->index);
-
-    if (start + old_size < self->ptr_ + self->index) return false;
-    if (start + new_size > self->ptr_ + self->capacity) return false;
-
-    if (new_size > old_size) {
-        self->index += new_size - old_size;
-    } else {
-        self->index -= old_size - new_size;
+void arena_free_raw(arena_t* self, void* ptr, usize size) {
+    if (ptr != NULL) {
+        log_trace("arena_free: %zuB (%uB total)", size, self->offset);
+        arena_resize_raw(self, ptr, size, 0);
+        memset(ptr, 0xDE, size);
     }
-    return true;
 }

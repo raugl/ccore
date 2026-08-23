@@ -1,5 +1,5 @@
-#include "common.h"
-#include "hash.h"
+#include "core/common.h"
+#include "core/hash.h"
 
 #if defined(_WIN32)
 #include <io.h>
@@ -9,12 +9,12 @@
 #endif
 
 #define GENERICS_IMPLEMENTATION
-#include "darray.h"
-#include "deque.h"
-#include "hashmap.h"
-#include "pqueue.h"
-#include "slice.h"
-#include "sort.h"
+#include "core/darray.h"
+#include "core/deque.h"
+#include "core/hashmap.h"
+#include "core/pqueue.h"
+#include "core/slice.h"
+#include "core/sort.h"
 
 // =================================================================================================
 // Section: Generic instantiations
@@ -23,7 +23,8 @@ static bool cmp_u64(u64 a, u64 b) {
     return a < b; // min heap
 }
 
-static bool cmp_f32(f32 a, f32 b) {
+static bool cmp_f32(f32 a, f32 b, void* userdata) {
+    (void)userdata;
     return a < b; // min heap
 }
 
@@ -40,18 +41,18 @@ DARRAY_IMPL(u32)
 DARRAY_IMPL(u64)
 DARRAY_IMPL(f32)
 
-DEQUE_IMPL(u8)
+DEQUE_IMPL_RAW(u8, deque_u8, const void*)
 DEQUE_IMPL(u32)
 DEQUE_IMPL(u64)
 DEQUE_IMPL(f32)
 
-PQUEUE_IMPL(u8, cmp_u64)
-PQUEUE_IMPL(u32, cmp_u64)
-PQUEUE_IMPL(u64, cmp_u64)
-PQUEUE_IMPL(f32, cmp_f32)
+// PQUEUE_IMPL(u8, cmp_u64)
+// PQUEUE_IMPL(u32, cmp_u64)
+// PQUEUE_IMPL(u64, cmp_u64)
+// PQUEUE_IMPL(f32, cmp_f32)
 
 HASHMAP_IMPL_RAW(u32, u32, map_u32, hash_bytes, equal_bytes)
-HASHMAP_IMPL_RAW(string_t, u64, map_str_u64, hash_slice, equal_slice)
+HASHMAP_IMPL_RAW(string, u64, map_str_u64, hash_slice, equal_slice)
 
 SORT_IMPL(f32, cmp_f32)
 
@@ -83,11 +84,15 @@ void panic_log_impl(const char* fmt, ...) {
     abort();
 }
 
+log_level_t core_log_level;
+
 void log_impl(log_level_t level, const char* fmt, ...) {
     static const char* labels[] = { "[trace]", "[debug]", "[info ]", "[warn ]", "[error]" };
     static const char* colors[] = {
         "\x1b[1;90m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m",
     };
+    if (level < core_log_level) return;
+
     if (isatty(fileno(stderr))) {
         fputs(colors[level], stderr);
         fputs(labels[level], stderr);

@@ -1,6 +1,5 @@
-CC := clang
-OPT := -g -O1
-CFLAGS := -std=c11 -Isrc -MMD -MP  \
+CC := gcc
+CFLAGS := -std=c11 -g -Og -Iinclude \
 	-Wall -Wextra -Wpedantic \
 	-Wshadow -Wundef -Wcast-qual \
 	-Wformat=2 -Wstrict-overflow=5 \
@@ -10,15 +9,14 @@ CFLAGS := -std=c11 -Isrc -MMD -MP  \
 	-Wwrite-strings -Wnull-dereference \
 	-Wno-unused-function
 
-# FIXME: The .d dependency files are being placed in the source tree
-# TODO: Currently it's impossible to pass target specific options, especially TEST definitions
-# TODO: I think that $(OPT) is not being passed along
-# TODO: Split the warning flags
+# $(LIB): CFLAGS += -g -Og -fsanitize=address,undefined
+$(TEST_BIN): CFLAGS += -g -O1 -DTESTING
+$(BUILD_DIR)/fuzz_%: CFLAGS += -g -O1 -DFUZZING -fsanitize=fuzzer,address,undefined
 
 BUILD_DIR := build
 OBJ_DIR := $(BUILD_DIR)/obj
 
-BIN := $(BUILD_DIR)/main
+LIB := $(BUILD_DIR)/libcore.a
 SRC := $(shell find src -name '*.c' | sort)
 OBJ := $(addprefix $(OBJ_DIR)/, $(SRC:.c=.o))
 
@@ -33,7 +31,7 @@ FUZZ_BINS := $(patsubst test/%.c,$(BUILD_DIR)/%,$(FUZZ_SRC))
 DEPS := $(OBJ:.o=.d) $(TEST_OBJ:.o=.d) $(FUZZ_OBJ:.o=.d)
 
 .PHONY: all
-all: $(BIN) $(TEST_BIN) $(FUZZ_BINS)
+all: $(LIB) $(TEST_BIN) $(FUZZ_BINS)
 
 .PHONY: help
 help:
@@ -43,14 +41,14 @@ help:
 	@printf "  make fuzz     - run all fuzz tests\n"
 	@printf "  make fuzz-xxx - run specific fuzz test\n"
 
-$(BIN): $(OBJ)
-	@$(CC) $(CFLAGS) $(OPT) -o $@ $^
+$(LIB): $(OBJ)
+	@ar rcs $@ $^
 	@printf "[$(CC)] Built target $@\n"
 
 $(OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	@printf "[$(CC)] \033[32mBuilding C object $@\033[0m\n"
-	@$(CC) $(CFLAGS) $(OPT) -c -o $@ $<
+	@$(CC) $(CFLAGS) -c $< -o $@ -MMD -MP -MF $(@:.o=.d) -MT $@
 
 .PHONY: test
 test: $(TEST_BIN)
@@ -58,7 +56,7 @@ test: $(TEST_BIN)
 
 $(TEST_BIN): $(TEST_OBJ) $(OBJ)
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(OPT) -o $@ $^
+	@$(CC) $(CFLAGS) -o $@ $^
 	@printf "[$(CC)] Built target $@\n"
 
 .PHONY: fuzz
@@ -71,7 +69,7 @@ fuzz-%: $(BUILD_DIR)/fuzz_%
 
 $(BUILD_DIR)/fuzz_%: test/fuzz_%.o $(OBJ)
 	@mkdir -p $(dir $@)
-	@$(CC) $(CFLAGS) $(OPT) -fsanitize=fuzzer,address,undefined -o $@ $^
+	@$(CC) $(CFLAGS) -o $@ $^
 	@printf "[$(CC)] Built target $@\n"
 
 .PHONY: check-fuzz-layout

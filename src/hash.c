@@ -1,15 +1,9 @@
-#include "hash.h"
-#include "random.h"
+#include "core/hash.h"
+#include "core/random.h"
 
 static const u64 rapid_secret[8] = {
-    0x2d358dccaa6c78a5ull,
-    0x8bb84b93962eacc9ull,
-    0x4b33a62ed433d4a3ull,
-    0x4d5a2da51de1aa47ull,
-    0xa0761d6478bd642full,
-    0xe7037ed1a0b428dbull,
-    0x90ed1765281c388cull,
-    0xaaaaaaaaaaaaaaaaull
+    0x2d358dccaa6c78a5ull, 0x8bb84b93962eacc9ull, 0x4b33a62ed433d4a3ull, 0x4d5a2da51de1aa47ull,
+    0xa0761d6478bd642full, 0xe7037ed1a0b428dbull, 0x90ed1765281c388cull, 0xaaaaaaaaaaaaaaaaull,
 };
 
 FORCE_INLINE void mul_mix(u64* a, u64* b) {
