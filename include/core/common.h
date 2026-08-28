@@ -15,25 +15,41 @@
 #include <string.h>
 #include <unistd.h>
 
+// TODO: These defines should probably be namespaced
 #if defined(__clang__)
-#define DIAG_PUSH _Pragma("clang diagnostic push")
-#define DIAG_POP  _Pragma("clang diagnostic pop")
-#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                   \
+#define PUSH_DIAG_IGNORE_GNU_ZERO_ARGS                                                              \
+    _Pragma("clang diagnostic push")                                                                \
     _Pragma("clang diagnostic ignored \"-Wgnu-zero-variadic-macro-arguments\"")
-#define DIAG_IGNORE_GNU_AUTO_TYPE _Pragma("clang diagnostic ignored \"-Wgnu-auto-type\"")
+
+#define PUSH_DIAG_IGNORE_GNU_AUTO_TYPE                                                              \
+    _Pragma("clang diagnostic push")                                                                \
+    _Pragma("clang diagnostic ignored \"-Wgnu-auto-type\"")
+
+#define PUSH_DIAG_IGNORE_GNU_ALIGNOF_EXPRESSION                                                     \
+    _Pragma("clang diagnostic push")                                                                \
+    _Pragma("clang diagnostic ignored \"-Wgnu-alignof-expression\"")
+
+#define POP_DIAG_IGNORE _Pragma("clang diagnostic pop")
 
 #elif defined(__GNUC__)
-#define DIAG_PUSH _Pragma("GCC diagnostic push")
-#define DIAG_POP  _Pragma("GCC diagnostic pop")
-#define DIAG_IGNORE_GNU_ZERO_ARGS                                                                   \
-    _Pragma("GCC diagnostic ignored \"-Wpedantic\"") // closest equivalent
-#define DIAG_IGNORE_GNU_AUTO_TYPE
+#define PUSH_DIAG_IGNORE_GNU_ZERO_ARGS                                                              \
+    _Pragma("GCC diagnostic push")                                                                  \
+    _Pragma("GCC diagnostic ignored \"-Wpedantic\"") /* closest equivalent */
+
+#define PUSH_DIAG_IGNORE_GNU_AUTO_TYPE                                                              \
+    _Pragma("GCC diagnostic push")
+
+#define PUSH_DIAG_IGNORE_GNU_ALIGNOF_EXPRESSION                                                     \
+    _Pragma("GCC diagnostic push")                                                                  \
+    _Pragma("GCC diagnostic ignored \"-Wpedantic\"") /* closest equivalent */
+
+#define POP_DIAG_IGNORE _Pragma("GCC diagnostic pop")
 
 #else
-#define DIAG_PUSH
-#define DIAG_POP
-#define DIAG_IGNORE_GNU_ZERO_ARGS
-#define DIAG_IGNORE_GNU_AUTO_TYPE
+#define PUSH_DIAG_IGNORE_GNU_ZERO_ARGS
+#define PUSH_DIAG_IGNORE_GNU_AUTO_TYPE
+#define PUSH_DIAG_IGNORE_GNU_ALIGNOF_EXPRESSION
+#define POP_DIAG_IGNORE
 #endif
 
 typedef int8_t i8;
@@ -64,9 +80,7 @@ typedef const char* cstring;
 #define PRINTF_FORMAT(fmt_idx, vaargs_idx) __attribute__((format(printf, fmt_idx, vaargs_idx)))
 #define FORCE_INLINE                       static inline __attribute__((__always_inline__))
 
-DIAG_PUSH
-DIAG_IGNORE_GNU_ZERO_ARGS
-
+PUSH_DIAG_IGNORE_GNU_ZERO_ARGS
 // NOTE: This depends on a gcc/clang extension for macro "overloading" based on the length of
 // `__VA_ARGS__`. The only other option would be to use `__VA_OPT__(,)` from C23
 #define INVOKE(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, N, ...) N
@@ -74,13 +88,20 @@ DIAG_IGNORE_GNU_ZERO_ARGS
     INVOKE(0, ##__VA_ARGS__, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_log_impl, panic_impl)( \
         __VA_ARGS__                                                                                                                                                                                       \
     )
-
-DIAG_POP
+POP_DIAG_IGNORE
 
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
 #define unreachable()  __builtin_unreachable()
 #define bit_cast(T, x) (*(T*)(&(x)))
+#define alignof_expr(expr)                                                                          \
+    (__extension__({                                                                                \
+        PUSH_DIAG_IGNORE_GNU_ALIGNOF_EXPRESSION                                                     \
+        usize ccore_alignof_expr__ = _Alignof(expr);                                                \
+        POP_DIAG_IGNORE                                                                             \
+        ccore_alignof_expr__;                                                                       \
+    }))
+
 
 #define log_trace(...) log_impl(LOG_LEVEL_TRACE, __VA_ARGS__)
 #define log_debug(...) log_impl(LOG_LEVEL_DEBUG, __VA_ARGS__)
@@ -101,10 +122,12 @@ typedef enum {
 
 extern log_level_t core_log_level;
 
-PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, const char* fmt, ...);
 
 // #define array_front(self)   array_at((self), 0)
 // #define array_back(self)    array_at((self), (self).len - 1)
+PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, cstring fmt, ...);
+#define array_front(self)   array_at((self), 0)
+#define array_back(self)    array_at((self), (self).len - 1)
 #define array_at(self, idx) (self).ptr[validate_idx((idx), (self).len)]
 #define array_len(arr)      sizeof((arr)) / sizeof((arr)[0])
 

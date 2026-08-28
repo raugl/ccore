@@ -155,7 +155,7 @@ bool map_iter_next(map_iter_t* self) {
     }                                                                                               \
                                                                                                     \
     Self Self##_init_alloc(allocator_t allocator) {                                                 \
-        assert(allocator.vtable != NULL);                                                           \
+        assert(allocator.proc != NULL);                                                             \
         return (Self) { .allocator = allocator };                                                   \
     }                                                                                               \
                                                                                                     \

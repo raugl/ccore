@@ -2,6 +2,7 @@
 #include "allocator.h"
 #include "common.h"
 
+// TODO: Maybe change all the data structure names to data and count
 #define DEQUE_DECL(T) DEQUE_DECL_RAW(T, deque_##T, const T*)
 
 #define DEQUE_DECL_RAW(T, Self, Ptr)                                                                \
@@ -52,7 +53,7 @@ DEQUE_DECL(f32)
     }                                                                                               \
                                                                                                     \
     Self Self##_init_alloc(allocator_t allocator) {                                                 \
-        assert(allocator.vtable != NULL);                                                           \
+        assert(allocator.proc != NULL);                                                             \
         return (Self) { .allocator = allocator };                                                   \
     }                                                                                               \
                                                                                                     \

@@ -86,12 +86,11 @@ void panic_log_impl(const char* fmt, ...) {
 
 log_level_t core_log_level;
 
-void log_impl(log_level_t level, const char* fmt, ...) {
-    static const char* labels[] = { "[trace]", "[debug]", "[info ]", "[warn ]", "[error]" };
-    static const char* colors[] = {
-        "\x1b[1;90m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m",
-    };
-    if (level < core_log_level) return;
+void log_impl(log_level_t level, cstring fmt, ...) {
+    if (level < ccore_log_level) return;
+
+    static cstring labels[] = { "[trace]", "[debug]", "[info ]", "[warn ]", "[error]" };
+    static cstring colors[] = { "\x1b[1;90m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m" };
 
     if (isatty(fileno(stderr))) {
         fputs(colors[level], stderr);
