@@ -29,7 +29,7 @@
 
 MATH_TYPE_DECLS(X)
 
-static bool is_pow2(usize num) {
+static bool is_pow2(u64 num) {
     return (num & (num - 1)) == 0;
 }
 
@@ -55,23 +55,14 @@ static u16 log2_ceil_u64(u64 num) {
     return log2_u64(num - 1) + 1;
 }
 
-static bool is_aligned(uintptr_t num) {
-    return num % sizeof(max_align_t) == 0;
-}
-
-// TODO: Make these the cannonical versions
-static bool is_aligned2(uintptr_t num, usize align) {
+static bool is_aligned(uintptr_t num, u64 align) {
     assert(is_pow2(align));
     return (num & (align - 1)) == 0;
 }
 
-static bool is_aligned2_ptr(void* ptr, usize align) {
+static bool is_aligned_ptr(void* ptr, u64 align) {
     assert(is_pow2(align));
     return ((uintptr_t)ptr & (align - 1)) == 0;
-}
-
-static bool is_aligned_ptr(void* ptr) {
-    return (uintptr_t)ptr % sizeof(max_align_t) == 0;
 }
 
 static u32 next_pow2_u32(u32 num) {

@@ -15,7 +15,7 @@
     Self Self##_init_alloc(allocator_t allocator);                                                  \
     void Self##_release(Self* self);                                                                \
                                                                                                     \
-    Self Self##_from_fixed(T* buffer, usize capacity);                                              \
+    Self Self##_init_fixed(T* buffer, usize capacity);                                              \
     bool Self##_ensure_capacity(Self* self, usize capacity);                                        \
     bool Self##_push(Self* self, T item);                                                           \
     bool Self##_peek(Self* self, T* out);                                                           \
@@ -74,7 +74,7 @@ PQUEUE_DECL(f32)
         return (Self) { .allocator = allocator };                                                   \
     }                                                                                               \
                                                                                                     \
-    Self Self##_from_fixed(T* buffer, usize capacity) {                                             \
+    Self Self##_init_fixed(T* buffer, usize capacity) {                                             \
         assert(buffer != NULL);                                                                     \
         for (usize i = capacity / 2; i-- > 0;) {                                                    \
             sift_down_##Self(buffer, capacity, i);                                                  \

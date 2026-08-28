@@ -5,10 +5,10 @@
 #define DARRAY_DECL(T) DARRAY_DECL_RAW(T, darray_##T, const T*)
 
 #define DARRAY_DECL_RAW(T, Self, Ptr)                                                               \
-    typedef struct {                                                                                \
-        T* ptr;                                                                                     \
+    typedef struct Self {                                                                           \
+        T*          ptr;                                                                            \
         allocator_t allocator;                                                                      \
-        u32 len, capacity;                                                                          \
+        u32         len, capacity;                                                                  \
     } Self;                                                                                         \
                                                                                                     \
     Self Self##_init_fixed(T* buffer, usize capacity);                                              \
@@ -45,6 +45,8 @@ DARRAY_DECL(f32)
 #define DARRAY_IMPL_RAW(T, Self, Ptr)                                                               \
     Self Self##_init_fixed(T* buffer, usize capacity) {                                             \
         assert(buffer != NULL);                                                                     \
+        memset_undefined(buffer, capacity * sizeof(T));                                             \
+                                                                                                    \
         return (Self) {                                                                             \
             .ptr = buffer,                                                                          \
             .capacity = (u32)capacity,                                                              \

@@ -102,7 +102,7 @@ void arena_rollback(arena_t* self, arena_t checkpoint) {
 
 void* arena_alloc_raw(arena_t* self, usize size, usize align) {
     assert(self != NULL);
-    assert(is_aligned2(size, align));
+    assert(is_aligned(size, align));
 
     log_trace("arena_alloc: %zuB (%uB total)", size, self->offset);
     u8* ptr = align_forward_ptr(self->ptr + self->offset, align);
@@ -146,9 +146,9 @@ bool arena_resize_raw(arena_t* self, void* old_ptr, usize old_size, usize new_si
 
 void* arena_realloc_raw(arena_t* self, void* old_ptr, usize old_size, usize new_size, usize align) {
     assert(self != NULL);
-    assert(is_aligned2_ptr(ptr, align));
-    assert(is_aligned2(old_size, align));
-    assert(is_aligned2(new_size, align));
+    assert(is_aligned_ptr(old_ptr, align));
+    assert(is_aligned(old_size, align));
+    assert(is_aligned(new_size, align));
 
     log_trace("arena_realloc: %zuB -> %zuB (%uB total)", old_size, new_size, self->offset);
     if (old_ptr != NULL && arena_resize_raw(self, old_ptr, old_size, new_size)) {

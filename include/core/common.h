@@ -102,6 +102,8 @@ POP_DIAG_IGNORE
         ccore_alignof_expr__;                                                                       \
     }))
 
+#define memset_undefined(ptr, len) memset((ptr), 0xAA, (len))
+#define memset_destroyed(ptr, len) memset((ptr), 0xDE, (len))
 
 #define log_trace(...) log_impl(LOG_LEVEL_TRACE, __VA_ARGS__)
 #define log_debug(...) log_impl(LOG_LEVEL_DEBUG, __VA_ARGS__)
@@ -122,9 +124,6 @@ typedef enum {
 
 extern log_level_t core_log_level;
 
-
-// #define array_front(self)   array_at((self), 0)
-// #define array_back(self)    array_at((self), (self).len - 1)
 PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, cstring fmt, ...);
 #define array_front(self)   array_at((self), 0)
 #define array_back(self)    array_at((self), (self).len - 1)

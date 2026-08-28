@@ -16,25 +16,48 @@ typedef struct {
 } map_entry_t;
 
 typedef struct {
-    map_meta_t* meta;
+    map_meta_t* _meta;
     void* key;
     void* value;
-    u32 capacity, remaining;
-    u16 key_sizeof, value_sizeof;
-    bool is_first;
+    u32   _capacity, _remaining;
+    u16   _key_sizeof, _value_sizeof;
+    bool  _is_first;
 } map_iter_t;
 
-bool map_iter_next(map_iter_t* self);
+// NOTE: It's unfortunate that this has to exist like this, but trying to place the definition
+// inside HASHMAP_IMPL either triggers ODR violations or forces me to to impose extra restrictions
+// upon the user about when and where its valid to include this file. This is the only real options.
+static bool map_iter_next(map_iter_t* self) {
+    assert(self != NULL);
 
-#define HASHMAP_ARRAY(var, K, V, size)                                                              \
+    if (self->_remaining == 0) {
+        return false;
+    }
+    while (self->_capacity-- > 0) {
+        if (self->_is_first) {
+            self->_is_first = false;
+        } else {
+            self->_meta++;
+            self->key = (u8*)self->key + self->_key_sizeof;
+            self->value = (u8*)self->value + self->_value_sizeof;
+        }
+        if ((*self->_meta & 0x80) != 0) { // if (is_used(*self->_meta))
+            self->_remaining--;
+            return true;
+        }
+    }
+    panic("iterator ran off the hashmap's end while probing for %d remaining entries", self->_remaining);
+}
+
+#define HASHMAP_BUFFER(var, K, V, size)                                                             \
     alignas(max_align_t)                                                                            \
         u8 var[(sizeof(map_meta_t) + sizeof(K) + sizeof(V)) * size + sizeof(max_align_t) * 2]
 
 #define HASHMAP_DECL(K, V) HASHMAP_DECL_RAW(K, V, map_##K##_##V)
 
 #define HASHMAP_DECL_RAW(K, V, Self)                                                                \
-    typedef struct {                                                                                \
-        map_meta_t* ptr_;                                                                           \
+    typedef struct Self {                                                                           \
+        map_meta_t* _ptr;                                                                           \
         allocator_t allocator;                                                                      \
         u32 len, capacity, available;                                                               \
     } Self;                                                                                         \
@@ -70,7 +93,7 @@ HASHMAP_DECL_RAW(string, u64, map_str_u64)
 #define METADATA_FINGERPRINT_MASK 0x7F
 
 #define map_keys(map, K)                                                                            \
-    (K*)align_forward_ptr((map).ptr_ + sizeof(map_meta_t) * (map).capacity, alignof(K))
+    (K*)align_forward_ptr((map)._ptr + sizeof(map_meta_t) * (map).capacity, alignof(K))
 
 #define map_values(map, K, V) (V*)align_forward_ptr(map_keys((map), K) + (map).capacity, alignof(V))
 
@@ -111,31 +134,7 @@ static bool equal_bytes(const void* a, const void* b, usize size) {
     return memcmp(a, b, size) == 0;
 }
 
-bool map_iter_next(map_iter_t* self) {
-    assert(self != NULL);
-
-    if (self->remaining == 0) {
-        return false;
-    }
-    while (self->capacity-- > 0) {
-        if (self->is_first) {
-            self->is_first = false;
-        } else {
-            self->meta++;
-            self->key = (u8*)self->key + self->key_sizeof;
-            self->value = (u8*)self->value + self->value_sizeof;
-        }
-        if (is_used(*self->meta)) {
-            self->remaining--;
-            return true;
-        }
-    }
-    panic(
-        "iterator ran off the hashmap's end while probing for %d remaining entries",
-        self->remaining
-    );
-}
-
+// TODO: Change all the manual memsets to 0xDE to memset_destroyed
 #define HASHMAP_IMPL(K, V, hash_fn, equal_fn)                                                       \
     HASHMAP_IMPL_RAW(K, V, map_##K##_##V, hash_fn, equal_fn)
 
@@ -143,11 +142,11 @@ bool map_iter_next(map_iter_t* self) {
     Self Self##_init_fixed(void* buffer, usize capacity) {                                          \
         assert(buffer != NULL);                                                                     \
         assert(is_pow2(capacity));                                                                  \
-        assert(is_aligned2_ptr(buffer, max_usize(alignof(K), alignof(V))));                         \
+        assert(is_aligned_ptr(buffer, max_usize(alignof(K), alignof(V))));                          \
         memset(buffer, METADATA_FREE, capacity * sizeof(map_meta_t));                               \
                                                                                                     \
         return (Self) {                                                                             \
-            .ptr_ = buffer,                                                                         \
+            ._ptr = buffer,                                                                         \
             .capacity = (u32)capacity,                                                              \
             .available = (u32)(capacity * LOAD_FACTOR / 100),                                       \
             .allocator = allocator_init_null(),                                                     \
@@ -169,8 +168,8 @@ bool map_iter_next(map_iter_t* self) {
         size = align_forward(size, alignof(V));                                                     \
         size += self->capacity * sizeof(V);                                                         \
                                                                                                     \
-        mem_free(self->allocator, (u8*)self->ptr_, size);                                           \
-        memset(self, 0xDE, sizeof(Self));                                                           \
+        /* mem_free(self->allocator, (u8*)self->ptr_, size); */ /* TODO: Test catch me */           \
+        memset_destroyed(self, sizeof(Self));                                                       \
     }                                                                                               \
                                                                                                     \
     static void Self##_put_assume_capacity_no_clobber(Self* self, K key, V value) {                 \
@@ -179,11 +178,11 @@ bool map_iter_next(map_iter_t* self) {
         const u8 fingerprint = take_fingerprint(hash);                                              \
                                                                                                     \
         u32 idx = (u32)hash & mask;                                                                 \
-        map_meta_t* meta = self->ptr_ + idx;                                                        \
+        map_meta_t* meta = &self->_ptr[idx];                                                        \
                                                                                                     \
         while (is_used(*meta)) {                                                                    \
             idx = (idx + 1) & mask;                                                                 \
-            meta = self->ptr_ + idx;                                                                \
+            meta = &self->_ptr[idx];                                                                \
         }                                                                                           \
                                                                                                     \
         K* keys = map_keys(*self, K);                                                               \
@@ -216,7 +215,7 @@ bool map_iter_next(map_iter_t* self) {
         memset(new_ptr, METADATA_FREE, new_capacity * sizeof(map_meta_t));                          \
                                                                                                     \
         Self new_map = {                                                                            \
-            .ptr_ = new_ptr,                                                                        \
+            ._ptr = new_ptr,                                                                        \
             .capacity = (u32)new_capacity,                                                          \
             .available = (u32)(new_capacity * LOAD_FACTOR / 100),                                   \
             .allocator = self->allocator,                                                           \
@@ -224,9 +223,9 @@ bool map_iter_next(map_iter_t* self) {
         if (self->len > 0) {                                                                        \
             K* keys = map_keys(*self, K);                                                           \
             V* values = map_values(*self, K, V);                                                    \
-            map_meta_t* metas = self->ptr_;                                                         \
+            map_meta_t* metas = self->_ptr;                                                         \
                                                                                                     \
-            for (usize i = 0; i < self->capacity; i++) {                                            \
+            for (usize i = 0; i < self->capacity; ++i) {                                            \
                 if (!is_used(metas[i])) continue;                                                   \
                 Self##_put_assume_capacity_no_clobber(&new_map, keys[i], values[i]);                \
                 if (self->len == new_map.len) break;                                                \
@@ -247,17 +246,17 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                     \
         u32 idx = (u32)hash & mask;                                                                 \
         u32 limit = self->capacity;                                                                 \
-        map_meta_t* meta = self->ptr_ + idx;                                                        \
+        map_meta_t* meta = &self->_ptr[idx];                                                        \
                                                                                                     \
         while (*meta != METADATA_FREE && limit > 0) {                                               \
             if (is_used(*meta) && get_fingerprint(*meta) == fingerprint) {                          \
-                if (equal_fn(&key, keys + idx, sizeof(K))) {                                        \
+                if (equal_fn(&key, &keys[idx], sizeof(K))) {                                        \
                     return idx;                                                                     \
                 }                                                                                   \
             }                                                                                       \
             limit--;                                                                                \
             idx = (idx + 1) & mask;                                                                 \
-            meta = self->ptr_ + idx;                                                                \
+            meta = &self->_ptr[idx];                                                                \
         }                                                                                           \
         return INVALID_IDX;                                                                         \
     }                                                                                               \
@@ -292,10 +291,10 @@ bool map_iter_next(map_iter_t* self) {
                                                                                                     \
         K* keys = map_keys(*self, K);                                                               \
         V* values = map_values(*self, K, V);                                                        \
-        memset(keys + idx, 0xDE, sizeof(K));                                                        \
-        memset(values + idx, 0xDE, sizeof(V));                                                      \
+        memset_destroyed(&keys[idx], sizeof(K));                                                    \
+        memset_destroyed(&values[idx], sizeof(V));                                                  \
                                                                                                     \
-        self->ptr_[idx] = METADATA_TOMBSTONE;                                                       \
+        self->_ptr[idx] = METADATA_TOMBSTONE;                                                       \
         self->available++;                                                                          \
         self->len--;                                                                                \
         return true;                                                                                \
@@ -333,16 +332,16 @@ bool map_iter_next(map_iter_t* self) {
         u32 idx = (u32)hash & mask;                                                                 \
         u32 limit = self->capacity;                                                                 \
         u32 first_tombstone_idx = INVALID_IDX;                                                      \
-        map_meta_t* meta = self->ptr_ + idx;                                                        \
+        map_meta_t* meta = &self->_ptr[idx];                                                        \
                                                                                                     \
         while (*meta != METADATA_FREE && limit > 0) {                                               \
             if (is_used(*meta) && get_fingerprint(*meta) == fingerprint) {                          \
-                K* test_key = keys + idx;                                                           \
+                K* test_key = &keys[idx];                                                           \
                                                                                                     \
                 if (equal_fn(&key, test_key, sizeof(K))) {                                          \
                     return (map_entry_t) {                                                          \
                         .key = test_key,                                                            \
-                        .value = values + idx,                                                      \
+                        .value = &values[idx],                                                      \
                         .existed = true,                                                            \
                     };                                                                              \
                 }                                                                                   \
@@ -351,37 +350,37 @@ bool map_iter_next(map_iter_t* self) {
             }                                                                                       \
             limit--;                                                                                \
             idx = (idx + 1) & mask;                                                                 \
-            meta = self->ptr_ + idx;                                                                \
+            meta = &self->_ptr[idx];                                                                \
         }                                                                                           \
                                                                                                     \
         if (first_tombstone_idx != INVALID_IDX) {                                                   \
             idx = first_tombstone_idx;                                                              \
-            meta = self->ptr_ + idx;                                                                \
+            meta = &self->_ptr[idx];                                                                \
         }                                                                                           \
         *meta = set_fingerprint(fingerprint);                                                       \
         self->available--;                                                                          \
         self->len++;                                                                                \
                                                                                                     \
         keys[idx] = key;                                                                            \
-        memset(values + idx, 0, sizeof(V));                                                         \
+        memset_undefined(&values[idx], sizeof(V));                                                  \
                                                                                                     \
         return (map_entry_t) {                                                                      \
-            .key = keys + idx,                                                                      \
-            .value = values + idx,                                                                  \
+            .key = &keys[idx],                                                                      \
+            .value = &values[idx],                                                                  \
             .existed = false,                                                                       \
         };                                                                                          \
     }                                                                                               \
                                                                                                     \
     map_iter_t Self##_iter(Self self) {                                                             \
         return (map_iter_t) {                                                                       \
-            .meta = self.ptr_,                                                                      \
+            ._meta = self._ptr,                                                                     \
             .key = map_keys(self, K),                                                               \
             .value = map_values(self, K, V),                                                        \
-            .is_first = true,                                                                       \
-            .remaining = self.len,                                                                  \
-            .capacity = self.capacity,                                                              \
-            .key_sizeof = sizeof(K),                                                                \
-            .value_sizeof = sizeof(V),                                                              \
+            ._is_first = true,                                                                      \
+            ._remaining = self.len,                                                                 \
+            ._capacity = self.capacity,                                                             \
+            ._key_sizeof = sizeof(K),                                                               \
+            ._value_sizeof = sizeof(V),                                                             \
         };                                                                                          \
     }
 #endif

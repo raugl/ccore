@@ -84,7 +84,7 @@ void panic_log_impl(const char* fmt, ...) {
     abort();
 }
 
-log_level_t core_log_level;
+log_level_t ccore_log_level;
 
 void log_impl(log_level_t level, cstring fmt, ...) {
     if (level < ccore_log_level) return;

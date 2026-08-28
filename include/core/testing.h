@@ -38,14 +38,15 @@ typedef struct {
         break;                                                                                      \
     }
 
+// FIXME: Add __LINE__ __FILE__ __func__ to the error message
 #define assert_type_full(prefix, suffix, T, fmt, a, op, b)                                          \
     do {                                                                                            \
-        T munit_tmp_a_ = (a);                                                                       \
-        T munit_tmp_b_ = (b);                                                                       \
-        if (!(munit_tmp_a_ op munit_tmp_b_)) {                                                      \
-            const char munit_tmp_fmt_[] = "assertion failed: %s %s %s (" prefix "%" fmt suffix      \
-                                          " %s " prefix "%" fmt suffix ")";                         \
-            panic(munit_tmp_fmt_, #a, #op, #b, munit_tmp_a_, #op, munit_tmp_b_);                    \
+        T test_tmp_a_ = (a);                                                                        \
+        T test_tmp_b_ = (b);                                                                        \
+        if (!(test_tmp_a_ op test_tmp_b_)) {                                                        \
+            const char test_tmp_fmt_[] = "assertion failed: %s %s %s (" prefix "%" fmt suffix       \
+                " %s " prefix "%" fmt suffix ")";                                                   \
+            panic(test_tmp_fmt_, #a, #op, #b, test_tmp_a_, #op, test_tmp_b_);                       \
         }                                                                                           \
     } while (0)
 
@@ -70,11 +71,10 @@ typedef struct {
 
 #define assert_equal_str(a, b)                                                                      \
     do {                                                                                            \
-        DIAG_PUSH;                                                                                  \
-        DIAG_IGNORE_GNU_AUTO_TYPE;                                                                  \
+        PUSH_DIAG_IGNORE_GNU_AUTO_TYPE;                                                             \
         __auto_type test_tmp_a_ = (a);                                                              \
         __auto_type test_tmp_b_ = (b);                                                              \
-        DIAG_POP;                                                                                   \
+        POP_DIAG_IGNORE;                                                                            \
                                                                                                     \
         if (test_tmp_a_.len != test_tmp_b_.len) {                                                   \
             panic(                                                                                  \
