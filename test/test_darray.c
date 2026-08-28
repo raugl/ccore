@@ -1,22 +1,12 @@
-#include "../include/core/common.h"
-#include "../include/core/darray.h"
-#include "../include/core/slice.h"
-#include "../include/core/testing.h"
+#include <core/common.h>
+#include <core/darray.h>
+#include <core/slice.h>
+#include <core/testing.h>
 
-#define MAX_CAPACITY 256
+// TODO: Add a test for init fixed
 
-typedef struct {
-    arena_t     arena;
-    allocator_t alloc;
-    rng_t       rng;
-} testing_context_t;
-
-testing_context_t test_ctx;
-
-static void test_darray_basic(void) {
-    BEGIN_TEST("test_darray_basic");
-    darray_u32 arr = darray_u32_init_alloc(test_ctx.alloc);
-
+static void test_darray_basic(testing_context test) {
+    darray_u32 arr = darray_u32_init_alloc(test.allocator);
     for (u32 i = 0; i < 10; ++i) {
         assert_true(darray_u32_push(&arr, i + 1));
     }
@@ -48,15 +38,11 @@ static void test_darray_basic(void) {
 
     assert_true(darray_u32_pop(&arr, &actual));
     assert_u32(actual, ==, 69);
-
     darray_u32_release(&arr);
-    END_TEST();
 }
 
-static void test_darray_ordered_remove(testing_context_t ctx) {
-    BEGIN_TEST("test_darray_ordered_remove");
-    darray_u32 arr = darray_u32_init_alloc(ctx.alloc);
-
+static void test_darray_ordered_remove(testing_context test) {
+    darray_u32 arr = darray_u32_init_alloc(test.allocator);
     for (u32 i = 0; i < 10; ++i) {
         assert_true(darray_u32_push(&arr, i));
     }
@@ -74,15 +60,11 @@ static void test_darray_ordered_remove(testing_context_t ctx) {
     assert_u32(darray_u32_remove(&arr, 0), ==, 0);
     assert_u32(array_at(arr, 0), ==, 1);
     assert_u32(arr.len, ==, 7);
-
     darray_u32_release(&arr);
-    END_TEST();
 }
 
-static void test_darray_swap_remove(testing_context_t ctx) {
-    BEGIN_TEST("test_darray_swap_remove");
-    darray_u32 arr = darray_u32_init_alloc(ctx.alloc);
-
+static void test_darray_swap_remove(testing_context test) {
+    darray_u32 arr = darray_u32_init_alloc(test.allocator);
     for (u32 i = 0; i < 10; ++i) {
         assert_true(darray_u32_push(&arr, i));
     }
@@ -100,14 +82,11 @@ static void test_darray_swap_remove(testing_context_t ctx) {
     assert_u32(darray_u32_swap_remove(&arr, 0), ==, 0);
     assert_u32(array_at(arr, 0), ==, 7);
     assert_u32(arr.len, ==, 7);
-
     darray_u32_release(&arr);
-    END_TEST();
 }
 
-static void test_darray_insert(testing_context_t ctx) {
-    BEGIN_TEST("test_darray_insert");
-    darray_u32 arr = darray_u32_init_alloc(ctx.alloc);
+static void test_darray_insert(testing_context test) {
+    darray_u32 arr = darray_u32_init_alloc(test.allocator);
 
     assert_true(darray_u32_insert(&arr, 0, 1));
     assert_true(darray_u32_push(&arr, 2));
@@ -131,19 +110,15 @@ static void test_darray_insert(testing_context_t ctx) {
     assert_true(darray_u32_insert_many(&arr, 0, many, 0));
     assert_size(arr.len, ==, 6);
     assert_u32(array_at(arr, 0), ==, 5);
-
     darray_u32_release(&arr);
-    END_TEST();
 }
 
-static void test_darray_growing(testing_context_t ctx) {
-    BEGIN_TEST("test_darray_growing");
-    darray_u8 arr = darray_u8_init_alloc(ctx.alloc);
+static void test_darray_growing(testing_context test) {
+    darray_u8 arr = darray_u8_init_alloc(test.allocator);
 
-    // TODO:
-    // if (grow.kind == GROW_POLICY_FIXED) {
-    //     assert_false(darray_u8_ensure_capacity(&arr, grow.size + 1));
-    // }
+    test.debug_alloc.fail_after_n = 0;
+    assert_false(darray_u8_ensure_capacity(&arr, 69));
+
     assert_true(darray_u8_push_many(&arr, "abcd", 4));
     darray_u8_shrink_to_fit(&arr);
 
@@ -153,14 +128,11 @@ static void test_darray_growing(testing_context_t ctx) {
 
     assert_true(darray_u8_insert_many(&arr, 4, "ijkl", 4));
     assert_equal_str(arr, cstr("abcdijklefgh"));
-
     darray_u8_release(&arr);
-    END_TEST();
 }
 
-static void test_darray_stack(testing_context_t ctx) {
-    BEGIN_TEST("test_darray_stack");
-    darray_u32 arr = darray_u32_init_alloc(ctx.alloc);
+static void test_darray_stack(testing_context test) {
+    darray_u32 arr = darray_u32_init_alloc(test.allocator);
 
     assert_true(darray_u32_push(&arr, 0));
     assert_true(darray_u32_push(&arr, 1));
@@ -176,14 +148,14 @@ static void test_darray_stack(testing_context_t ctx) {
     }
     assert_false(darray_u32_back(&arr, NULL));
     assert_false(darray_u32_pop(&arr, NULL));
-
     darray_u32_release(&arr);
-    END_TEST();
 }
 
-typedef void (*unit_test_fn)(void);
-
-const unit_test_fn test_darray[] = {
-    &test_darray_basic,  &test_darray_growing,        &test_darray_stack,
-    &test_darray_insert, &test_darray_ordered_remove, &test_darray_swap_remove,
-}
+const testing_case test_suite_darray[] = {
+    { "test_darray_basic",          &test_darray_basic          },
+    { "test_darray_growing",        &test_darray_growing        },
+    { "test_darray_stack",          &test_darray_stack          },
+    { "test_darray_insert",         &test_darray_insert         },
+    { "test_darray_ordered_remove", &test_darray_ordered_remove },
+    { "test_darray_swap_remove",    &test_darray_swap_remove    },
+};

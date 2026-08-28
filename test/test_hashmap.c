@@ -1,19 +1,14 @@
 #define GENERICS_IMPLEMENTATION
-#include "common.h"
-#include "testing.h"
-#include "hashmap.h"
+#include <core/common.h>
+#include <core/hashmap.h>
+#include <core/testing.h>
 
-// #define MUNIT_ENABLE_ASSERT_ALIASES
-// #include "../vendor/munit/munit.h"
+// TODO: Add a bunch of tests
+static void test_hashmap_basic_usage(testing_context test) {
+    // HASHMAP_BUFFER(buffer, u32, u32, 8) = {0};
+    // map_u32 map = map_u32_init_fixed(buffer, 8);
 
-static void basic_usage(void) {
-    //     allocator_t alloc = {};
-    //     map_u32_t map = map_u32_init_alloc(&alloc, 0);
-    // cleanup:
-    //     map_u32_release(&map);
-
-    HASHMAP_ARRAY(buffer, u32, u32, 8) = {0};
-    map_u32_t map = map_u32_init_fixed(buffer, 8);
+    map_u32 map = map_u32_init_alloc(test.allocator);
 
     const u32 count = 5;
     u32 total = 0;
@@ -39,13 +34,18 @@ static void basic_usage(void) {
         sum += *map_u32_get(&map, i);
     }
     assert_u32(sum, ==, total);
+    map_u32_release(&map);
 }
+
+const testing_case test_suite_hashmap[] = {
+    { "test_hashmap_basic_usage", &test_hashmap_basic_usage },
+};
 
 // HASHMAP_DECL_RAW(u64, string_t, map);
 // HASHMAP_IMPL_RAW(u64, string_t, map, hash_bytes, equal_bytes);
 
 // int main(void) {
-    // HASHMAP_ARRAY(buffer, u64, string_t, 1024) = {0};
+    // HASHMAP_BUFFER(buffer, u64, string_t, 1024) = {0};
     // map_t map = map_init_fixed(buffer, 1024);
 
     //     allocator_t alloc = {};
