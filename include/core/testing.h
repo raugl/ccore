@@ -1,42 +1,30 @@
 #pragma once
 #include <inttypes.h>
 #include "allocator.h"
+#include "debug_allocator.h"
 #include "common.h"
 #include "random.h"
 
+// TODO: Add functions which take this in to force debug allocator failures.
+// In that case also make the debug allocator field private.
+typedef struct testing_context {
+    arena_t         arena;
+    allocator_t     allocator;
+    debug_allocator debug_alloc;
+    rng_t*          rng;
+} testing_context;
+
+typedef void (*testing_proc)(testing_context);
+
+typedef struct testing_case {
+    cstring      name;
+    testing_proc proc;
+} testing_case;
+
+// Runs every test in `tests`, prints a summary, returns the number of failures.
+u32 run_test_suite(const testing_case* tests, usize count, i32 argc, cstring argv[]);
+
 int LLVMFuzzerTestOneInput(const u8* data, usize size);
-
-typedef struct {
-    union {
-        struct {
-            void* buffer;
-            usize size;
-        };
-
-        arena_t* arena;
-        allocator_t* alloc;
-    };
-
-    // grow_policy_kind_t kind;
-} test_grow_policy_t;
-
-// TODO:
-#define BEGIN_TEST(name)
-#define END_TEST()
-
-#define SETUP_TEST(var, name, T, grow)                                                              \
-    name##_t var;                                                                                   \
-    switch (grow.kind) {                                                                            \
-    case GROW_POLICY_FIXED:                                                                         \
-        var = name##_init_fixed(grow.buffer, grow.size / sizeof(T));                                \
-        break;                                                                                      \
-    case GROW_POLICY_ARENA:                                                                         \
-        var = name##_init_arena(grow.arena);                                                        \
-        break;                                                                                      \
-    case GROW_POLICY_ALLOC:                                                                         \
-        var = name##_init_alloc(grow.alloc);                                                        \
-        break;                                                                                      \
-    }
 
 // FIXME: Add __LINE__ __FILE__ __func__ to the error message
 #define assert_type_full(prefix, suffix, T, fmt, a, op, b)                                          \
