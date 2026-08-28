@@ -10,7 +10,7 @@
 typedef struct testing_context {
     arena_t         arena;
     allocator_t     allocator;
-    debug_allocator debug_alloc;
+    debug_allocator _debug_alloc;
     rng_t*          rng;
 } testing_context;
 
@@ -20,6 +20,18 @@ typedef struct testing_case {
     cstring      name;
     testing_proc proc;
 } testing_case;
+
+FORCE_INLINE void testing_fail_next_resize(testing_context* test) {
+    test->_debug_alloc.force_resize_fail = true;
+}
+
+FORCE_INLINE void testing_fail_next_alloc(testing_context* test) {
+    test->_debug_alloc.fail_after_n = 0;
+}
+
+FORCE_INLINE void testing_fail_alloc_after(testing_context* test, i32 n) {
+    test->_debug_alloc.fail_after_n = n;
+}
 
 // Runs every test in `tests`, prints a summary, returns the number of failures.
 u32 run_test_suite(const testing_case* tests, usize count, i32 argc, cstring argv[]);

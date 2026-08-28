@@ -69,18 +69,18 @@ static test_result run_test_case(testing_case test, u64 seed, u32 timeout_second
         allocator_t gpa = allocator_init_malloc();
 
         testing_context ctx = {
-            .rng         = &rng,
-            .arena       = arena_init_alloc(gpa, 32 * 1024),
-            .debug_alloc = debug_allocator_init(gpa, gpa),
+            .rng          = &rng,
+            .arena        = arena_init_alloc(gpa, 32 * 1024),
+            ._debug_alloc = debug_allocator_init(gpa, gpa),
         };
-        ctx.allocator = allocator_init_debug(&ctx.debug_alloc);
+        ctx.allocator = allocator_init_debug(&ctx._debug_alloc);
 
         assert(test.proc != NULL && "Did you forget to asign the test's function pointer?");
         test.proc(ctx);
 
-        debug_allocator_release(&ctx.debug_alloc);
+        bool leaked = debug_allocator_release(&ctx._debug_alloc, true);
         arena_release(&ctx.arena);
-        _exit(0);
+        _exit(leaked);
     }
 
     // Parent process

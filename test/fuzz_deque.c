@@ -201,7 +201,7 @@ static void fuzz_deque(testing_context test, fuzz_reader input) {
         case ACTION_GROW: {
             const u8 growth = fuzz_read_u8(&input) & 7;
             assert_u8(
-                deque_u32_ensure_capacity(&deque, deque.len + growth), ==,
+                deque_u32_reserve_exact(&deque, deque.count + growth), ==,
                 darray_u32_ensure_capacity(&oracle, oracle.len + growth)
             );
             break;
@@ -215,16 +215,16 @@ static void fuzz_deque(testing_context test, fuzz_reader input) {
     assert_u8(deque_u32_front(&deque, &actual), ==, oracle.len > 0);
     if (oracle.len > 0) assert_u32(actual, ==, oracle.ptr[0]);
 
-    assert_u32(deque.len, ==, oracle.len);
+    assert_u32(deque.count, ==, oracle.len);
     assert_u32(deque.capacity, ==, oracle.capacity);
 
     for (usize i = 0; i < oracle.len; ++i) {
         assert_true(deque_u32_pop_front(&deque, &actual));
         assert_u32(actual, ==, oracle.ptr[i]);
     }
-    assert_u32(deque.len, ==, oracle.len);
+    assert_u32(deque.count, ==, oracle.len);
 
-    deque_u32_release(&deque);
+    deque_u32_destroy(&deque);
     mem_free(test.allocator, buffer, MAX_CAPACITY);
     assert_false(fuzz_allocator_release(&fuzz_alloc, true));
 }
@@ -239,13 +239,13 @@ int LLVMFuzzerTestOneInput(const u8* data, usize size) {
     allocator_t alloc = allocator_init_arena(&arena);
 
     testing_context ctx = {
-        .rng = &rng, // NOTE: I don't use `test.arena`, so I didn't bother handing memory to it
-        .allocator = allocator_init_debug(&ctx.debug_alloc),
-        .debug_alloc = debug_allocator_init(alloc, alloc),
+        .rng          = &rng, // NOTE: I don't use `test.arena`, so I didn't bother handing it memory
+        .allocator    = allocator_init_debug(&ctx._debug_alloc),
+        ._debug_alloc = debug_allocator_init(alloc, alloc),
     };
     fuzz_deque(ctx, input);
 
-    assert_false(debug_allocator_release(&ctx.debug_alloc, true));
+    assert_false(debug_allocator_release(&ctx._debug_alloc, true));
     arena_release(&arena);
     return EXIT_SUCCESS;
 }
