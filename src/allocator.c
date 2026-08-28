@@ -1,4 +1,6 @@
+#define GENERICS_IMPLEMENTATION
 #include "core/allocator.h"
+#include "core/debug_allocator.h"
 #include "core/math.h"
 
 static void* null_allocator_proc(allocator_operation op, void* self, void* old_ptr, usize old_size, usize new_size, usize align) {
@@ -172,3 +174,176 @@ void arena_free_raw(arena_t* self, void* old_ptr, usize old_size) {
         memset(old_ptr, 0xDE, old_size);
     }
 }
+
+#define CANARY_SIZE 16
+
+// `size` is assumed to be the user requested size, `ptr` should include an extra `CANARY_SIZE * 2`
+static u32 check_canaries(u8* ptr, usize size) {
+    u32 result = 0;
+    for (i32 i = -CANARY_SIZE; i < 0; ++i) {
+        if (ptr[i] != 0xAA) {
+            result += 1;
+            break;
+        }
+    }
+    for (u32 i = 0; i < CANARY_SIZE; ++i) {
+        if (ptr[size + i] != 0xAA) {
+            result += 2;
+            break;
+        }
+    }
+    return result;
+}
+
+// TODO: Pass caller location information into here
+static void assert_allocation(allocation_info* info, allocator_operation operation, void* ptr, usize size) {
+    static const cstring op_names[4] = { "alloc", "realloc", "resize", "free" };
+    static const cstring bounds[4] = { "", "front", "back", "front and the back" };
+
+    const cstring op = op_names[operation];
+    if (!info)              panic("%s of untracked pointer %p", op, ptr);
+    if (!info->alive)       panic("%s of freed pointer %p", op, ptr);
+    if (info->size != size) panic("%s size mismatch for %p: allocated %zu, passed as %zu", op, ptr, info->size, size);
+
+    const u32 side = check_canaries(ptr, size);
+    if (side != 0)          panic("overran the %s bounds of %p (was %zu bytes)", bounds[side], ptr, info->size);
+}
+
+// FIXME: I don't take into accout the user's requested alignment. I always just offset it by 16 and
+// hope for the best. I should use the currently useless `align` field from `allocation_info` to fix
+// this.
+static void* debug_allocator_proc(allocator_operation op, void* self_, void* old_ptr, usize old_size, usize new_size, usize align) {
+    debug_allocator* self = self_;
+    const allocation_info new_info = {
+        .size  = new_size,
+        .align = (u32)align,
+        .alive = true,
+    };
+
+    switch (op) {
+    case ALLOCATOR_OPERATION_ALLOC: {
+        if (self->fail_after_n == 0) return NULL;
+        if (self->fail_after_n > 0) self->fail_after_n--;
+
+        if (!map_alloc_info_ensure_capacity(&self->_allocations, self->_allocations.len + 1)) {
+            log_error("debug_allocator metadata allocation failed");
+            return NULL;
+        }
+
+        new_size += CANARY_SIZE * 2;
+        u8* ptr = self->_backing.proc(op, self->_backing.self, 0, 0, new_size, align);
+        if (!ptr) return NULL;
+
+        memset_undefined(ptr, new_size);
+        assert(map_alloc_info_put(&self->_allocations, ptr, new_info));
+        return ptr + CANARY_SIZE;
+    }
+    case ALLOCATOR_OPERATION_REALLOC: {
+        allocation_info* info = old_ptr ? map_alloc_info_get(&self->_allocations, old_ptr) : NULL;
+        if (old_ptr) assert_allocation(info, op, old_ptr, old_size);
+        if (self->fail_after_n == 0) return NULL;
+        if (self->fail_after_n > 0) self->fail_after_n--;
+
+        if (!map_alloc_info_ensure_capacity(&self->_allocations, self->_allocations.len + 1)) {
+            log_error("debug_allocator metadata allocation failed");
+            return NULL;
+        }
+
+        old_size += CANARY_SIZE * 2;
+        new_size += CANARY_SIZE * 2;
+        old_ptr  = (u8*)old_ptr - CANARY_SIZE;
+        u8* ptr = self->_backing.proc(op, self->_backing.self, old_ptr, old_size, new_size, align);
+        if (!ptr) return NULL;
+
+        if (new_size > old_size)  memset_undefined(ptr + old_size, new_size - old_size);
+        if (new_size <= old_size) memset_undefined(ptr + new_size - CANARY_SIZE, CANARY_SIZE);
+        if (old_ptr) info->alive = (old_ptr == ptr);
+
+        // FIXME: I'd want to also set the freed regions to `0xDE`, but its basically impossible
+        // for libc's `realloc`, and even for my custom allocators I should still request them
+        // to poison the memory instead of me trying to do it after its been already released.
+
+        assert(map_alloc_info_put(&self->_allocations, ptr, new_info));
+        return ptr + CANARY_SIZE;
+    }
+    case ALLOCATOR_OPERATION_RESIZE: {
+        allocation_info* info = map_alloc_info_get(&self->_allocations, old_ptr);
+        assert_allocation(info, op, old_ptr, old_size);
+        if (self->force_resize_fail) return NULL;
+
+        old_size += CANARY_SIZE * 2;
+        new_size += CANARY_SIZE * 2;
+        old_ptr  = (u8*)old_ptr - CANARY_SIZE;
+        u8* ptr = self->_backing.proc(op, self->_backing.self, old_ptr, old_size, new_size, 0);
+        if (!ptr) return NULL;
+
+        if (new_size > old_size)  memset_undefined(ptr + old_size, new_size - old_size);
+        if (new_size <= old_size) memset_undefined(ptr + new_size - CANARY_SIZE, CANARY_SIZE);
+        info->size = new_size;
+
+        // FIXME: I'd want to also set the freed regions to `0xDE`, but its basically impossible
+        // for libc's `realloc`, and even for my custom allocators I should still request them
+        // to poison the memory instead of me trying to do it after its been already released.
+
+        return ptr;
+    }
+    case ALLOCATOR_OPERATION_FREE: {
+        if (old_ptr == NULL) return NULL;
+        allocation_info* info = map_alloc_info_get(&self->_allocations, old_ptr);
+        assert_allocation(info, op, old_ptr, old_size);
+
+        old_size += CANARY_SIZE * 2;
+        old_ptr  = (u8*)old_ptr - CANARY_SIZE;
+        memset_destroyed(old_ptr, info->size);
+
+        self->_backing.proc(op, self->_backing.self, old_ptr, old_size, 0, 0);
+        info->alive = false;
+        return NULL;
+    }
+    }
+}
+
+allocator_t allocator_init_debug(debug_allocator* debug) {
+    return (allocator_t) { .self = debug, .proc = &debug_allocator_proc };
+}
+
+debug_allocator debug_allocator_init(allocator_t internal, allocator_t backing) {
+    return (debug_allocator) {
+        ._backing     = backing,
+        ._allocations = map_alloc_info_init_alloc(internal),
+        .fail_after_n = -1,
+    };
+}
+
+bool debug_allocator_release(debug_allocator* debug, bool log_leaks) {
+    assert(debug != NULL);
+
+    u32 leaked_count = 0;
+    usize leaked_size = 0;
+    map_iter_t iter = map_alloc_info_iter(debug->_allocations);
+
+    while (map_iter_next(&iter)) {
+        allocation_info info = *(allocation_info*)iter.value;
+        if (info.alive) {
+            leaked_size += info.size;
+            leaked_count += 1;
+        }
+    }
+
+    if (log_leaks && leaked_count > 0) {
+        static const cstring suffixes[6] = {"B", "KB", "MB", "GB", "TB", "PB"};
+        f64 size = (f64)leaked_size;
+        u32 i = 0;
+        while (size >= 1024 && i < array_len(suffixes) - 1) {
+            size /= 1024;
+            i++;
+        }
+        log_error("Leaked %.2f %s across %d allocations", size, suffixes[i], leaked_count);
+    }
+
+    map_alloc_info_release(&debug->_allocations);
+    memset_destroyed(debug, sizeof(debug_allocator));
+    return (leaked_count > 0);
+}
+
+HASHMAP_IMPL_RAW(void*, allocation_info, map_alloc_info, hash_ptr, equal_bytes)

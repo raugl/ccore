@@ -122,7 +122,7 @@ typedef enum {
     LOG_LEVEL_ERROR,
 } log_level_t;
 
-extern log_level_t core_log_level;
+extern log_level_t ccore_log_level;
 
 PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, cstring fmt, ...);
 #define array_front(self)   array_at((self), 0)
