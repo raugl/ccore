@@ -125,6 +125,27 @@ typedef enum {
 extern log_level_t ccore_log_level;
 
 PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, cstring fmt, ...);
+
+#define ANSI_BLACK   "\x1b[30m"
+#define ANSI_RED     "\x1b[31m"
+#define ANSI_GREEN   "\x1b[32m"
+#define ANSI_YELLOW  "\x1b[33m"
+#define ANSI_BLUE    "\x1b[34m"
+#define ANSI_MAGENTA "\x1b[35m"
+#define ANSI_CYAN    "\x1b[36m"
+#define ANSI_WHITE   "\x1b[37m"
+
+#define ANSI_BRIGHT_BLACK   "\x1b[90m"
+#define ANSI_BRIGHT_RED     "\x1b[91m"
+#define ANSI_BRIGHT_GREEN   "\x1b[92m"
+#define ANSI_BRIGHT_YELLOW  "\x1b[93m"
+#define ANSI_BRIGHT_BLUE    "\x1b[94m"
+#define ANSI_BRIGHT_MAGENTA "\x1b[95m"
+#define ANSI_BRIGHT_CYAN    "\x1b[96m"
+#define ANSI_BRIGHT_WHITE   "\x1b[97m"
+
+PRINTF_FORMAT(3, 4) void fprintf_color(FILE* restrict stream, cstring restrict color, cstring restrict fmt, ...);
+
 #define array_front(self)   array_at((self), 0)
 #define array_back(self)    array_at((self), (self).len - 1)
 #define array_at(self, idx) (self).ptr[validate_idx((idx), (self).len)]

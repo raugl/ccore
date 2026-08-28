@@ -24,6 +24,11 @@ SLICE_DECL_RAW(void, slice_raw)
         .ptr = (str), .len = strlen((str))                                                          \
     }
 
+bool string_starts_with(string str, string prefix);
+bool string_starts_with_cstr(string str, cstring prefix);
+bool cstring_starts_with(cstring str, cstring prefix);
+bool cstring_starts_with_str(cstring str, string prefix);
+
 #ifdef GENERICS_IMPLEMENTATION
 
 #define SLICE_IMPL(T) SLICE_IMPL_RAW(T, slice_##T)

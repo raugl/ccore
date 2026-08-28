@@ -96,83 +96,84 @@ typedef struct {
         }                                                                                           \
     } while (0)
 
-typedef struct {
+typedef struct fuzz_reader {
     const u8* ptr;
-    u32 idx, len;
-} fuzz_reader_t;
+    usize     idx, len;
+} fuzz_reader;
 
-static bool fuzz_reader_is_empty(fuzz_reader_t reader) {
+FORCE_INLINE bool fuzz_reader_is_empty(fuzz_reader reader) {
     return reader.idx == reader.len;
 }
 
-static inline void fuzz_reader_impl(fuzz_reader_t* reader, void* dest, usize len) {
+FORCE_INLINE void fuzz_reader_impl(fuzz_reader* reader, void* dest, usize len) {
     usize avail = min_usize(reader->len - reader->idx, len);
     memcpy(dest, reader->ptr + reader->idx, avail);
     memset((u8*)dest + avail, 0, len - avail);
     reader->idx += avail;
 }
 
-static bool fuzz_read_bool(fuzz_reader_t* reader) {
+// NOTE: This consumes a full byte instead of the purely necessary bit
+FORCE_INLINE bool fuzz_read_bool(fuzz_reader* reader) {
     bool result;
-    fuzz_reader_impl(reader, &result, sizeof(bool));
+    fuzz_reader_impl(reader, &result, sizeof(u8));
     return (result & 1) == 1;
 }
 
-static u8 fuzz_read_u8(fuzz_reader_t* reader) {
+FORCE_INLINE u8 fuzz_read_u8(fuzz_reader* reader) {
     u8 result;
     fuzz_reader_impl(reader, &result, sizeof(u8));
     return result;
 }
 
-static u16 fuzz_read_u16(fuzz_reader_t* reader) {
+FORCE_INLINE u16 fuzz_read_u16(fuzz_reader* reader) {
     u16 result;
     fuzz_reader_impl(reader, &result, sizeof(u16));
     return result;
 }
 
-static u32 fuzz_read_u32(fuzz_reader_t* reader) {
+FORCE_INLINE u32 fuzz_read_u32(fuzz_reader* reader) {
     u32 result;
     fuzz_reader_impl(reader, &result, sizeof(u32));
     return result;
 }
 
-static u64 fuzz_read_u64(fuzz_reader_t* reader) {
+FORCE_INLINE u64 fuzz_read_u64(fuzz_reader* reader) {
     u64 result;
     fuzz_reader_impl(reader, &result, sizeof(u64));
     return result;
 }
 
-static usize fuzz_read_usize(fuzz_reader_t* reader) {
+FORCE_INLINE usize fuzz_read_usize(fuzz_reader* reader) {
     usize result;
     fuzz_reader_impl(reader, &result, sizeof(usize));
     return result;
 }
 
-static i8 fuzz_read_i8(fuzz_reader_t* reader) {
+FORCE_INLINE i8 fuzz_read_i8(fuzz_reader* reader) {
     i8 result;
     fuzz_reader_impl(reader, &result, sizeof(i8));
     return result;
 }
 
-static i16 fuzz_read_i16(fuzz_reader_t* reader) {
+FORCE_INLINE i16 fuzz_read_i16(fuzz_reader* reader) {
     i16 result;
     fuzz_reader_impl(reader, &result, sizeof(i16));
     return result;
 }
 
-static i32 fuzz_read_i32(fuzz_reader_t* reader) {
+FORCE_INLINE i32 fuzz_read_i32(fuzz_reader* reader) {
     i32 result;
     fuzz_reader_impl(reader, &result, sizeof(i32));
     return result;
 }
 
-static i64 fuzz_read_i64(fuzz_reader_t* reader) {
+FORCE_INLINE i64 fuzz_read_i64(fuzz_reader* reader) {
     i64 result;
     fuzz_reader_impl(reader, &result, sizeof(i64));
     return result;
 }
 
-static isize fuzz_read_isize(fuzz_reader_t* reader) {
+FORCE_INLINE isize fuzz_read_isize(fuzz_reader* reader) {
     isize result;
     fuzz_reader_impl(reader, &result, sizeof(isize));
     return result;

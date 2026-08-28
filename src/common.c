@@ -92,17 +92,68 @@ void log_impl(log_level_t level, cstring fmt, ...) {
     static cstring labels[] = { "[trace]", "[debug]", "[info ]", "[warn ]", "[error]" };
     static cstring colors[] = { "\x1b[1;90m", "\x1b[1;34m", "\x1b[32m", "\x1b[33m", "\x1b[31m" };
 
-    if (isatty(fileno(stderr))) {
-        fputs(colors[level], stderr);
-        fputs(labels[level], stderr);
-        fputs("\x1b[0m: ", stderr);
-    } else {
-        fputs(labels[level], stderr);
-        fputs(": ", stderr);
-    }
+    fprintf_color(stderr, colors[level], "%s", labels[level]);
+    fputs(": ", stderr);
+
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+}
+
+void fprintf_color(FILE* restrict stream, cstring restrict color, cstring restrict fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+
+    if (isatty(fileno(stream))) {
+        fputs(color, stream);
+        vfprintf(stderr, fmt, va);
+        fputs("\x1b[0m", stderr);
+    } else {
+        vfprintf(stderr, fmt, va);
+    }
+    va_end(va);
+}
+
+// TODO: Think about what would be the most useful for all of these to return for combination of
+// empty strings.
+bool string_starts_with(string str, string prefix) {
+    if (str.len < prefix.len) return false;
+
+    for (usize i = 0; i < str.len; ++i) {
+        if (str.ptr[i] != prefix.ptr[i]) return false;
+    }
+    return true;
+}
+
+bool string_starts_with_cstr(string str, cstring prefix) {
+    assert(prefix != NULL);
+
+    for (usize i = 0; i < str.len ; ++i) {
+        if (prefix[i] == '\0') return true;
+        if (str.ptr[i] != prefix[i]) return false;
+    }
+    return false;
+}
+
+bool cstring_starts_with(cstring str, cstring prefix) {
+    assert(str != NULL);
+    assert(prefix != NULL);
+
+    for (; *str != '\0'; ++str) {
+        if (*prefix == '\0') return true;
+        if (*str != *prefix) return false;
+    }
+    return false;
+}
+
+bool cstring_starts_with_str(cstring str, string prefix) {
+    assert(str != NULL);
+
+    // for (usize i = 0; i < prefix.len ; ++i) {
+    //     if (str[i] == '\0') return true;
+    //     if (prefix.ptr[i] != str[i]) return false;
+    // }
+    return false;
 }

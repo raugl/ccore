@@ -23,11 +23,11 @@ static void os_get_random(void* buf, usize size) {
 
 typedef u64 rng_t;
 
-static rng_t rng_seed(u64 seed) {
+FORCE_INLINE rng_t rng_seed(u64 seed) {
     return seed;
 }
 
-static rng_t rng_seed_entropy(void) {
+FORCE_INLINE rng_t rng_seed_entropy(void) {
     rng_t state;
     os_get_random(&state, sizeof(state));
     return state;
@@ -41,31 +41,31 @@ static u64 w1rand(rng_t* state) {
     return (u64)(t ^ (t >> 64));
 }
 
-static u8 rng_u8(rng_t* state) {
+FORCE_INLINE u8 rng_u8(rng_t* state) {
     return (u8)(w1rand(state) >> (64 - 8));
 }
 
-static u16 rng_u16(rng_t* state) {
+FORCE_INLINE u16 rng_u16(rng_t* state) {
     return (u16)(w1rand(state) >> (64 - 16));
 }
 
-static u32 rng_u32(rng_t* state) {
+FORCE_INLINE u32 rng_u32(rng_t* state) {
     return (u32)(w1rand(state) >> (64 - 32));
 }
 
-static u64 rng_u64(rng_t* state) {
+FORCE_INLINE u64 rng_u64(rng_t* state) {
     return w1rand(state);
 }
 
 // Generates a number in the range [0, 1)
 // A float can represent 24 bits of information
-static f32 rng_f32(rng_t* state) {
+FORCE_INLINE f32 rng_f32(rng_t* state) {
     return (f32)(w1rand(state) >> 40) * 0x1.0p-24f;
 }
 
 // Generates a number in the range [0, 1)
 // A double can represent 53 bits of information
-static f64 rng_f64(rng_t* state) {
+FORCE_INLINE f64 rng_f64(rng_t* state) {
     return (f64)(w1rand(state) >> 11) * 0x1.0p-53;
 }
 
@@ -82,17 +82,17 @@ static void rng_bytes(rng_t* state, void* out, usize size) {
 }
 
 // Generates a number in the range [start, end)
-static u64 rng_range_int(rng_t* state, u64 start, u64 end) {
+FORCE_INLINE u64 rng_range_int(rng_t* state, u64 start, u64 end) {
     u128 mul = w1rand(state) * (end - start);
     return start + (u64)(mul >> 64);
 }
 
 // Generates a number in the range [start, end)
-static f32 rng_range_f32(rng_t* state, f32 start, f32 end) {
+FORCE_INLINE f32 rng_range_f32(rng_t* state, f32 start, f32 end) {
     return start + (end - start) * rng_f32(state);
 }
 
 // Generates a number in the range [start, end)
-static f64 rng_range_f64(rng_t* state, f64 start, f64 end) {
+FORCE_INLINE f64 rng_range_f64(rng_t* state, f64 start, f64 end) {
     return start + (end - start) * rng_f64(state);
 }
