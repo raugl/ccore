@@ -21,16 +21,14 @@ typedef struct testing_case {
     testing_proc proc;
 } testing_case;
 
-FORCE_INLINE void testing_fail_next_resize(testing_context* test) {
-    test->_debug_alloc.force_resize_fail = true;
-}
-
+// Applies to realloc too
 FORCE_INLINE void testing_fail_next_alloc(testing_context* test) {
-    test->_debug_alloc.fail_after_n = 0;
+    test->_debug_alloc.fail_next_alloc = true;
 }
 
-FORCE_INLINE void testing_fail_alloc_after(testing_context* test, i32 n) {
-    test->_debug_alloc.fail_after_n = n;
+// Fails the next in-place resize, forcing falling back to realloc
+FORCE_INLINE void testing_fail_next_resize(testing_context* test) {
+    test->_debug_alloc.fail_next_resize = true;
 }
 
 // Runs every test in `tests`, prints a summary, returns the number of failures.
@@ -38,19 +36,46 @@ u32 run_test_suite(const testing_case* tests, usize count, i32 argc, cstring arg
 
 int LLVMFuzzerTestOneInput(const u8* data, usize size);
 
+// TODO: replace libc's assert with my own
 // FIXME: Add __LINE__ __FILE__ __func__ to the error message
 #define assert_type_full(prefix, suffix, T, fmt, a, op, b)                                          \
     do {                                                                                            \
-        T test_tmp_a_ = (a);                                                                        \
-        T test_tmp_b_ = (b);                                                                        \
-        if (!(test_tmp_a_ op test_tmp_b_)) {                                                        \
-            const char test_tmp_fmt_[] = "assertion failed: %s %s %s (" prefix "%" fmt suffix       \
+        T assert_tmp_a_ = (a);                                                                      \
+        T assert_tmp_b_ = (b);                                                                      \
+        if (!(assert_tmp_a_ op assert_tmp_b_)) {                                                    \
+            const char assert_tmp_fmt_[] = "assertion failed: %s %s %s (" prefix "%" fmt suffix     \
                 " %s " prefix "%" fmt suffix ")";                                                   \
-            panic(test_tmp_fmt_, #a, #op, #b, test_tmp_a_, #op, test_tmp_b_);                       \
+            panic(assert_tmp_fmt_, #a, #op, #b, assert_tmp_a_, #op, assert_tmp_b_);                 \
         }                                                                                           \
     } while (0)
 
 #define assert_type(T, fmt, a, op, b) assert_type_full("", "", T, fmt, a, op, b)
+
+#define assert_slice(fmt, a, op, b)                                                                 \
+    do {                                                                                            \
+        PUSH_DIAG_IGNORE_GNU_AUTO_TYPE;                                                             \
+        __auto_type assert_tmp_a_ = (a);                                                            \
+        __auto_type assert_tmp_b_ = (b);                                                            \
+        POP_DIAG_IGNORE;                                                                            \
+                                                                                                    \
+        if (assert_tmp_a_.len != assert_tmp_b_.len) {                                               \
+            panic(                                                                                  \
+                "assertion failed: " #a ".len (%zu) != " #b ".len (%zu)",                           \
+                (usize)assert_tmp_a_.len, (usize)assert_tmp_b_.len                                  \
+            );                                                                                      \
+        }                                                                                           \
+        for (usize assert_tmp_i_ = 0; assert_tmp_i_ < assert_tmp_a_.len; ++assert_tmp_i_) {         \
+            if (!(assert_tmp_a_.data[assert_tmp_i_] op assert_tmp_b_.data[assert_tmp_i_])) {        \
+                panic(                                                                              \
+                    "assertion failed: " #a "[%zu] %s " #b "[%zu] (%" fmt " %s %" fmt ")",          \
+                    assert_tmp_i_, #op, assert_tmp_i_,                                              \
+                    assert_tmp_a_.data[assert_tmp_i_], #op, assert_tmp_b_.data[assert_tmp_i_]       \
+                );                                                                                  \
+            }                                                                                       \
+        }                                                                                           \
+    } while (0)
+
+#define assert_str(a, b) assert_slice("c", (a), ==, (b))
 
 #define assert_i8(a, op, b)  assert_type(i8, PRIi8, a, op, b)
 #define assert_i16(a, op, b) assert_type(i16, PRIi16, a, op, b)
@@ -69,47 +94,20 @@ int LLVMFuzzerTestOneInput(const u8* data, usize size);
 #define assert_true(x)  assert((x))
 #define assert_false(x) assert(!(x))
 
-#define assert_equal_str(a, b)                                                                      \
-    do {                                                                                            \
-        PUSH_DIAG_IGNORE_GNU_AUTO_TYPE;                                                             \
-        __auto_type test_tmp_a_ = (a);                                                              \
-        __auto_type test_tmp_b_ = (b);                                                              \
-        POP_DIAG_IGNORE;                                                                            \
-                                                                                                    \
-        if (test_tmp_a_.len != test_tmp_b_.len) {                                                   \
-            panic(                                                                                  \
-                "assertion failed: " #a ".len (%zu) != " #b ".len (%zu)",                           \
-                (usize)test_tmp_a_.len,                                                             \
-                (usize)test_tmp_b_.len                                                              \
-            );                                                                                      \
-        }                                                                                           \
-        for (usize test_idx_ = 0; test_idx_ < test_tmp_a_.len; ++test_idx_) {                       \
-            if (test_tmp_a_.ptr[test_idx_] != test_tmp_b_.ptr[test_idx_]) {                         \
-                panic(                                                                              \
-                    "assertion failed: " #a "[%zu] (%c) != " #b "[%zu] (%c)",                       \
-                    test_idx_,                                                                      \
-                    test_tmp_a_.ptr[test_idx_],                                                     \
-                    test_idx_,                                                                      \
-                    test_tmp_b_.ptr[test_idx_]                                                      \
-                );                                                                                  \
-            }                                                                                       \
-        }                                                                                           \
-    } while (0)
-
 typedef struct fuzz_reader {
-    const u8* ptr;
-    usize     idx, len;
+    const u8* data;
+    usize     index, len;
 } fuzz_reader;
 
 FORCE_INLINE bool fuzz_reader_is_empty(fuzz_reader reader) {
-    return reader.idx == reader.len;
+    return reader.index == reader.len;
 }
 
-FORCE_INLINE void fuzz_reader_impl(fuzz_reader* reader, void* dest, usize len) {
-    usize avail = min_usize(reader->len - reader->idx, len);
-    memcpy(dest, reader->ptr + reader->idx, avail);
-    memset((u8*)dest + avail, 0, len - avail);
-    reader->idx += avail;
+FORCE_INLINE void fuzz_reader_impl(fuzz_reader* reader, void* dest, usize size) {
+    usize avail = min_usize(reader->len - reader->index, size);
+    memcpy(dest, reader->data + reader->index, avail);
+    memset((u8*)dest + avail, 0, size - avail);
+    reader->index += avail;
 }
 
 // NOTE: This consumes a full byte instead of the purely necessary bit

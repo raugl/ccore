@@ -8,7 +8,7 @@
     typedef struct Self {                                                                           \
         T*          _data;                                                                          \
         allocator_t _allocator;                                                                     \
-        u32         _head, count, capacity;                                                         \
+        u32         _head, len, capacity;                                                           \
     } Self;                                                                                         \
                                                                                                     \
     Self Self##_init_fixed(T* buffer, usize capacity);                                              \
@@ -17,15 +17,15 @@
                                                                                                     \
     bool Self##_reserve(Self* self, usize capacity);                                                \
     bool Self##_reserve_exact(Self* self, usize capacity);                                          \
-    bool Self##_reserve_spare(Self* self, usize spare_count);                                       \
+    bool Self##_reserve_spare(Self* self, usize count);                                             \
     bool Self##_push_front_many(Self* self, Ptr items, usize count);                                \
     bool Self##_push_back_many(Self* self, Ptr items, usize count);                                 \
     bool Self##_push_front(Self* self, T item);                                                     \
     bool Self##_push_back(Self* self, T item);                                                      \
     bool Self##_pop_front(Self* self, T* out);                                                      \
     bool Self##_pop_back(Self* self, T* out);                                                       \
-    bool Self##_front(Self* self, T* out);                                                          \
-    bool Self##_back(Self* self, T* out);                                                           \
+    bool Self##_front(const Self* self, T* out);                                                    \
+    bool Self##_back(const Self* self, T* out);                                                     \
     T* Self##_at(Self* self, usize index);
 
 DEQUE_DECL_RAW(u8, deque_u8, const void*)
@@ -40,14 +40,14 @@ DEQUE_DECL(f32)
 #define CACHE_LINE_SIZE 64
 
 static void deque_copy_buffer(deque_u8* deque, u8* new_ptr, usize new_capacity, usize size_of) {
-    if (deque->_head + deque->count <= deque->capacity) {
+    if (deque->_head + deque->len <= deque->capacity) {
         // ..[aaaaaaaaaa].. => [aaaaaaaaaa]....................
         // [aaaaaaaaaaaaaa] => [aaaaaaaaaaaaaa]................
-        memcpy(new_ptr, deque->_data + deque->_head, deque->count * size_of);
+        memcpy(new_ptr, deque->_data + deque->_head, deque->len * size_of);
         return;
     }
     const u32 right_len = deque->capacity - deque->_head;
-    const u32 left_len = deque->count - right_len;
+    const u32 left_len = deque->len - right_len;
 
     if (deque->_data != new_ptr) {
         // bb].....[aaaaaaa => [aaaaaa|bb].....................
@@ -84,7 +84,6 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
 #define DEQUE_IMPL_RAW(T, Self, Ptr)                                                                \
     Self Self##_init_fixed(T* buffer, usize capacity) {                                             \
         assert(buffer != NULL);                                                                     \
-        assert(is_pow2(capacity));                                                                  \
         memset_undefined(buffer, capacity * sizeof(T));                                             \
                                                                                                     \
         return (Self) {                                                                             \
@@ -106,13 +105,18 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
     }                                                                                               \
                                                                                                     \
     bool Self##_reserve(Self* self, usize new_capacity) {                                           \
+        assert(self != NULL);                                                                       \
         if (self->capacity >= new_capacity) return true;                                            \
+                                                                                                    \
         static const usize init_capacity = CACHE_LINE_SIZE / sizeof(T);                             \
-        return Self##_reserve_exact(self, new_capacity + (new_capacity / 2 + init_capacity));       \
+        const usize growth = (new_capacity / 2 + init_capacity);                                    \
+                                                                                                    \
+        if (growth > UINT32_MAX - new_capacity) return false;                                       \
+        return Self##_reserve_exact(self, new_capacity + growth);                                   \
     }                                                                                               \
                                                                                                     \
-    bool Self##_reserve_spare(Self* self, usize spare_count) {                                      \
-        return Self##_reserve(self, self->count + spare_count);                                     \
+    bool Self##_reserve_spare(Self* self, usize count) {                                            \
+        return Self##_reserve(self, self->len + count);                                             \
     }                                                                                               \
                                                                                                     \
     bool Self##_reserve_exact(Self* self, usize new_capacity) {                                     \
@@ -139,10 +143,8 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
         assert(self != NULL);                                                                       \
         if (count == 0) return true;                                                                \
         assert(items != NULL);                                                                      \
+        if (!Self##_reserve_spare(self, count)) return false;                                       \
                                                                                                     \
-        if (self->count + count > self->capacity) {                                                 \
-            if (!Self##_reserve_spare(self, count)) return false;                                   \
-        }                                                                                           \
         if (self->_head < count) {                                                                  \
             const u32 left_len = (u32)count - self->_head;                                          \
             memcpy(self->_data, (const T*)items + left_len, self->_head * sizeof(T));               \
@@ -152,74 +154,77 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
             self->_head -= (u32)count;                                                              \
             memcpy(self->_data + self->_head, items, count * sizeof(T));                            \
         }                                                                                           \
-        self->count += (u32)count;                                                                  \
+        self->len += (u32)count;                                                                    \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
-    /* FIXME: I dont actually insert anything */                                                    \
     bool Self##_push_back_many(Self* self, Ptr items, usize count) {                                \
         assert(self != NULL);                                                                       \
         if (count == 0) return true;                                                                \
         assert(items != NULL);                                                                      \
+        if (!Self##_reserve_spare(self, count)) return false;                                       \
                                                                                                     \
-        if (self->count + count > self->capacity) {                                                 \
-            if (!Self##_reserve_spare(self, count)) return false;                                   \
-        }                                                                                           \
-        self->count += (u32)count;                                                                  \
+        /* FIXME: I dont actually insert anything */                                                \
+        self->len += (u32)count;                                                                    \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
     bool Self##_push_front(Self* self, T item) {                                                    \
         assert(self != NULL);                                                                       \
         if (!Self##_reserve_spare(self, 1)) return false;                                           \
-        if (self->_head == 0) self->_head = self->count;                                            \
+        if (self->_head == 0) self->_head = self->len;                                              \
         self->_data[--self->_head] = item;                                                          \
-        self->count++;                                                                              \
+        self->len++;                                                                                \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
     bool Self##_push_back(Self* self, T item) {                                                     \
         assert(self != NULL);                                                                       \
         if (!Self##_reserve_spare(self, 1)) return false;                                           \
-        self->_data[deque_buffer_index((deque_u8*)self, self->count++)] = item;                     \
+        self->_data[deque_buffer_index((deque_u8*)self, self->len++)] = item;                       \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
     bool Self##_pop_front(Self* self, T* out) {                                                     \
         assert(self != NULL);                                                                       \
-        if (self->count == 0) return false;                                                         \
+        if (self->len == 0) return false;                                                           \
+                                                                                                    \
         if (out) *out = self->_data[self->_head];                                                   \
+        memset_destroyed(self->_data + self->_head, sizeof(T));                                     \
         self->_head = (u32)deque_buffer_index((deque_u8*)self, 1);                                  \
-        self->count--;                                                                              \
+        self->len--;                                                                                \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
     bool Self##_pop_back(Self* self, T* out) {                                                      \
         assert(self != NULL);                                                                       \
-        if (self->count == 0) return false;                                                         \
-        if (out) *out = self->_data[deque_buffer_index((deque_u8*)self, --self->count)];            \
+        if (self->len == 0) return false;                                                           \
+                                                                                                    \
+        const usize index = deque_buffer_index((deque_u8*)self, --self->len);                       \
+        if (out) *out = self->_data[index];                                                         \
+        memset_destroyed(self->_data + index, sizeof(T));                                           \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
-    bool Self##_front(Self* self, T* out) {                                                         \
+    bool Self##_front(const Self* self, T* out) {                                                   \
         assert(self != NULL);                                                                       \
         assert(out != NULL);                                                                        \
-        if (self->count == 0) return false;                                                         \
+        if (self->len == 0) return false;                                                           \
         *out = self->_data[self->_head];                                                            \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
-    bool Self##_back(Self* self, T* out) {                                                          \
+    bool Self##_back(const Self* self, T* out) {                                                    \
         assert(self != NULL);                                                                       \
         assert(out != NULL);                                                                        \
-        if (self->count == 0) return false;                                                         \
-        *out = self->_data[deque_buffer_index((deque_u8*)self, self->count - 1)];                   \
+        if (self->len == 0) return false;                                                           \
+        *out = self->_data[deque_buffer_index((const deque_u8*)self, self->len - 1)];               \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
     T* Self##_at(Self* self, usize index) {                                                         \
         assert(self != NULL);                                                                       \
-        if (self->count == 0) return NULL;                                                          \
+        if (self->len == 0) return NULL;                                                            \
         return self->_data + deque_buffer_index((deque_u8*)self, index);                            \
     }
 #endif

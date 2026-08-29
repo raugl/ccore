@@ -117,7 +117,7 @@ static void test_deque_fifo(testing_context test) {
     u32 actual;
 
     assert_true(deque_u32_push_front_many(&deque, items, array_len(items)));
-    for (usize i = 0; i < array_len(items); ++i) {
+    for (u32 i = 0; i < array_len(items); ++i) {
         assert_true(deque_u32_back    (&deque, &actual)); assert_u32(actual, ==, items[i]);
         assert_true(deque_u32_pop_back(&deque, &actual)); assert_u32(actual, ==, items[i]);
     }
@@ -125,7 +125,7 @@ static void test_deque_fifo(testing_context test) {
     assert_false(deque_u32_pop_back(&deque, NULL));
 
     assert_true(deque_u32_push_back_many(&deque, items, array_len(items)));
-    for (usize i = array_len(items); i-- > 0;) {
+    for (i32 i = array_len(items) - 1; i > 0; --i) {
         assert_true(deque_u32_front    (&deque, &actual)); assert_u32(actual, ==, items[i]);
         assert_true(deque_u32_pop_front(&deque, &actual)); assert_u32(actual, ==, items[i]);
     }
@@ -135,9 +135,9 @@ static void test_deque_fifo(testing_context test) {
 }
 
 const testing_case test_suite_deque[] = {
-    { "test_deque_basic",       &test_deque_basic       },
-    { "test_deque_fixed",       &test_deque_fixed       },
-    { "test_deque_slow_growth", &test_deque_slow_growth },
-    { "test_deque_push_many",   &test_deque_push_many   },
-    { "test_deque_fifo",        &test_deque_fifo        },
+    { "deque_basic",       &test_deque_basic       },
+    { "deque_fixed",       &test_deque_fixed       },
+    { "deque_slow_growth", &test_deque_slow_growth },
+    { "deque_push_many",   &test_deque_push_many   },
+    { "deque_fifo",        &test_deque_fifo        },
 };

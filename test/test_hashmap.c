@@ -38,7 +38,7 @@ static void test_hashmap_basic_usage(testing_context test) {
 }
 
 const testing_case test_suite_hashmap[] = {
-    { "test_hashmap_basic_usage", &test_hashmap_basic_usage },
+    { "hashmap_basic_usage", &test_hashmap_basic_usage },
 };
 
 // HASHMAP_DECL_RAW(u64, string_t, map);

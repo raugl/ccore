@@ -22,15 +22,15 @@ static bool fuzz_allocator_init(fuzz_allocator* self, fuzz_reader* input, alloca
         .buffers[0].len = MAX_CAPACITY,
         .buffers[1].len = MAX_CAPACITY,
     };
-    if (!(fuzz.buffers[0].ptr = mem_alloc(backing, u32, fuzz.buffers[0].len))) goto cleanup;
-    if (!(fuzz.buffers[1].ptr = mem_alloc(backing, u32, fuzz.buffers[1].len))) goto cleanup;
+    if (!(fuzz.buffers[0].data = mem_alloc(backing, u32, fuzz.buffers[0].len))) goto cleanup;
+    if (!(fuzz.buffers[1].data = mem_alloc(backing, u32, fuzz.buffers[1].len))) goto cleanup;
 
     *self = fuzz;
     return true;
 
 cleanup:
-    mem_free(backing, fuzz.buffers[0].ptr, fuzz.buffers[0].len);
-    mem_free(backing, fuzz.buffers[1].ptr, fuzz.buffers[1].len);
+    mem_free(backing, fuzz.buffers[0].data, fuzz.buffers[0].len);
+    mem_free(backing, fuzz.buffers[1].data, fuzz.buffers[1].len);
     return false;
 }
 
@@ -45,16 +45,16 @@ static bool fuzz_allocator_release(fuzz_allocator* self, bool log_leaks) {
     if (log_leaks && leaked_count > 0) {
         log_error("Leaked %d fuzz allocator allocations!", leaked_count);
     }
-    mem_free(self->backing, self->buffers[0].ptr, self->buffers[0].len);
-    mem_free(self->backing, self->buffers[1].ptr, self->buffers[1].len);
+    mem_free(self->backing, self->buffers[0].data, self->buffers[0].len);
+    mem_free(self->backing, self->buffers[1].data, self->buffers[1].len);
 
     memset_destroyed(self, sizeof(fuzz_allocator));
     return (leaked_count > 0);
 }
 
 static u8 fuzz_allocator_mem_slot(fuzz_allocator self, void* mem, usize size) {
-    u8 slot = (mem == self.buffers[1].ptr);
-    assert(mem == self.buffers[slot].ptr);
+    u8 slot = (mem == self.buffers[1].data);
+    assert(mem == self.buffers[slot].data);
     assert(self.used[slot]);
     assert(self.sizes[slot] == size);
     return slot;
@@ -74,7 +74,7 @@ static void* fuzz_allocator_proc(allocator_operation op, void* self_, void* old_
 
         self->used[slot] = true;
         self->sizes[slot] = new_size;
-        return self->buffers[slot].ptr;
+        return self->buffers[slot].data;
     }
     case ALLOCATOR_OPERATION_REALLOC: {
         assert(old_size <= self->buffers[0].len);
@@ -93,7 +93,7 @@ static void* fuzz_allocator_proc(allocator_operation op, void* self_, void* old_
             self->used[new_slot] = true;
             self->sizes[new_slot] = new_size;
 
-            void* new_ptr = self->buffers[new_slot].ptr;
+            void* new_ptr = self->buffers[new_slot].data;
             memcpy(new_ptr, old_ptr, min_usize(old_size, new_size));
             return new_ptr;
         }
@@ -158,26 +158,26 @@ static void fuzz_deque(testing_context test, fuzz_reader input) {
         switch (fuzz_read_weighted_action(&input)) {
         case ACTION_PUSH_BACK:
             item = fuzz_read_u32(&input);
-            assert_u8(deque_u32_push_back(&deque, item), ==, darray_u32_push(&oracle, item));
+            assert_u8(deque_u32_push_back(&deque, item), ==, darray_u32_append(&oracle, item));
             break;
         case ACTION_PUSH_FRONT:
             item = fuzz_read_u32(&input);
             assert_u8(deque_u32_push_front(&deque, item), ==, darray_u32_insert(&oracle, 0, item));
             break;
         case ACTION_PUSH_BACK_MANY: {
-            u8 items_count = fuzz_read_u8(&input) & 7;
-            for (u8 i = 0; i < items_count; ++i) {
+            u32 items_count = fuzz_read_u8(&input) & 7;
+            for (u32 i = 0; i < items_count; ++i) {
                 items[i] = fuzz_read_u32(&input);
             }
             assert_u8(
                 deque_u32_push_back_many(&deque, items, items_count), ==,
-                darray_u32_push_many(&oracle, items, items_count)
+                darray_u32_append_many(&oracle, items, items_count)
             );
             break;
         }
         case ACTION_PUSH_FRONT_MANY: {
-            u8 items_count = fuzz_read_u8(&input) & 7;
-            for (u8 i = 0; i < items_count; ++i) {
+            u32 items_count = fuzz_read_u8(&input) & 7;
+            for (u32 i = 0; i < items_count; ++i) {
                 items[i] = fuzz_read_u32(&input);
             }
             assert_u8(
@@ -201,8 +201,8 @@ static void fuzz_deque(testing_context test, fuzz_reader input) {
         case ACTION_GROW: {
             const u8 growth = fuzz_read_u8(&input) & 7;
             assert_u8(
-                deque_u32_reserve_exact(&deque, deque.count + growth), ==,
-                darray_u32_ensure_capacity(&oracle, oracle.len + growth)
+                deque_u32_reserve_exact(&deque, deque.len + growth), ==,
+                darray_u32_reserve_exact(&oracle, oracle.len + growth)
             );
             break;
         }
@@ -213,16 +213,16 @@ static void fuzz_deque(testing_context test, fuzz_reader input) {
     assert_u32(actual, ==, expected);
 
     assert_u8(deque_u32_front(&deque, &actual), ==, oracle.len > 0);
-    if (oracle.len > 0) assert_u32(actual, ==, oracle.ptr[0]);
+    if (oracle.len > 0) assert_u32(actual, ==, oracle.data[0]);
 
-    assert_u32(deque.count, ==, oracle.len);
+    assert_u32(deque.len, ==, oracle.len);
     assert_u32(deque.capacity, ==, oracle.capacity);
 
-    for (usize i = 0; i < oracle.len; ++i) {
+    for (u32 i = 0; i < oracle.len; ++i) {
         assert_true(deque_u32_pop_front(&deque, &actual));
-        assert_u32(actual, ==, oracle.ptr[i]);
+        assert_u32(actual, ==, oracle.data[i]);
     }
-    assert_u32(deque.count, ==, oracle.len);
+    assert_u32(deque.len, ==, oracle.len);
 
     deque_u32_destroy(&deque);
     mem_free(test.allocator, buffer, MAX_CAPACITY);
@@ -231,8 +231,8 @@ static void fuzz_deque(testing_context test, fuzz_reader input) {
 
 int LLVMFuzzerTestOneInput(const u8* data, usize size) {
     fuzz_reader input = {
-        .ptr = data,
-        .len = size,
+        .data = data,
+        .len  = size,
     };
     rng_t rng = rng_seed(fuzz_read_u64(&input));
     arena_t arena = arena_init_alloc(allocator_init_malloc(), 16 * 1024);

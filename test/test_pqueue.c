@@ -34,5 +34,5 @@ static void test_pqueue_build_and_drain(testing_context test) {
 }
 
 const testing_case test_suite_pqueue[] = {
-    { "test_pqueue_build_and_drain", &test_pqueue_build_and_drain },
+    { "pqueue_build_and_drain", &test_pqueue_build_and_drain },
 };

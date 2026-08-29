@@ -222,29 +222,33 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
 
     switch (op) {
     case ALLOCATOR_OPERATION_ALLOC: {
-        if (self->fail_after_n == 0) return NULL;
-        if (self->fail_after_n > 0) self->fail_after_n--;
+        if (self->fail_next_alloc) {
+            self->fail_next_alloc = false;
+            return NULL;
+        }
 
-        if (!map_alloc_info_ensure_capacity(&self->_allocations, self->_allocations.len + 1)) {
+        if (!map_alloc_info_ensure_capacity(&self->allocations, self->allocations.len + 1)) {
             log_error("debug_allocator metadata allocation failed");
             return NULL;
         }
 
         new_size += CANARY_SIZE * 2;
-        u8* ptr = self->_backing.proc(op, self->_backing.self, 0, 0, new_size, align);
+        u8* ptr = self->backing.proc(op, self->backing.self, 0, 0, new_size, align);
         if (!ptr) return NULL;
 
         memset_undefined(ptr, new_size);
-        assert(map_alloc_info_put(&self->_allocations, ptr, new_info));
+        assert(map_alloc_info_put(&self->allocations, ptr, new_info));
         return ptr + CANARY_SIZE;
     }
     case ALLOCATOR_OPERATION_REALLOC: {
-        allocation_info* info = old_ptr ? map_alloc_info_get(&self->_allocations, old_ptr) : NULL;
+        allocation_info* info = old_ptr ? map_alloc_info_get(&self->allocations, old_ptr) : NULL;
         if (old_ptr) assert_allocation(info, op, old_ptr, old_size);
-        if (self->fail_after_n == 0) return NULL;
-        if (self->fail_after_n > 0) self->fail_after_n--;
+        if (self->fail_next_alloc) {
+            self->fail_next_alloc = false;
+            return NULL;
+        }
 
-        if (!map_alloc_info_ensure_capacity(&self->_allocations, self->_allocations.len + 1)) {
+        if (!map_alloc_info_ensure_capacity(&self->allocations, self->allocations.len + 1)) {
             log_error("debug_allocator metadata allocation failed");
             return NULL;
         }
@@ -252,7 +256,7 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
         old_size += CANARY_SIZE * 2;
         new_size += CANARY_SIZE * 2;
         old_ptr  = (u8*)old_ptr - CANARY_SIZE;
-        u8* ptr = self->_backing.proc(op, self->_backing.self, old_ptr, old_size, new_size, align);
+        u8* ptr = self->backing.proc(op, self->backing.self, old_ptr, old_size, new_size, align);
         if (!ptr) return NULL;
 
         if (new_size > old_size)  memset_undefined(ptr + old_size, new_size - old_size);
@@ -263,18 +267,21 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
         // for libc's `realloc`, and even for my custom allocators I should still request them
         // to poison the memory instead of me trying to do it after its been already released.
 
-        assert(map_alloc_info_put(&self->_allocations, ptr, new_info));
+        assert(map_alloc_info_put(&self->allocations, ptr, new_info));
         return ptr + CANARY_SIZE;
     }
     case ALLOCATOR_OPERATION_RESIZE: {
-        allocation_info* info = map_alloc_info_get(&self->_allocations, old_ptr);
+        allocation_info* info = map_alloc_info_get(&self->allocations, old_ptr);
         assert_allocation(info, op, old_ptr, old_size);
-        if (self->force_resize_fail) return NULL;
+        if (self->fail_next_resize) {
+            self->fail_next_resize = false;
+            return NULL;
+        }
 
         old_size += CANARY_SIZE * 2;
         new_size += CANARY_SIZE * 2;
         old_ptr  = (u8*)old_ptr - CANARY_SIZE;
-        u8* ptr = self->_backing.proc(op, self->_backing.self, old_ptr, old_size, new_size, 0);
+        u8* ptr = self->backing.proc(op, self->backing.self, old_ptr, old_size, new_size, 0);
         if (!ptr) return NULL;
 
         if (new_size > old_size)  memset_undefined(ptr + old_size, new_size - old_size);
@@ -289,14 +296,14 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
     }
     case ALLOCATOR_OPERATION_FREE: {
         if (old_ptr == NULL) return NULL;
-        allocation_info* info = map_alloc_info_get(&self->_allocations, old_ptr);
+        allocation_info* info = map_alloc_info_get(&self->allocations, old_ptr);
         assert_allocation(info, op, old_ptr, old_size);
 
         old_size += CANARY_SIZE * 2;
         old_ptr  = (u8*)old_ptr - CANARY_SIZE;
         memset_destroyed(old_ptr, info->size);
 
-        self->_backing.proc(op, self->_backing.self, old_ptr, old_size, 0, 0);
+        self->backing.proc(op, self->backing.self, old_ptr, old_size, 0, 0);
         info->alive = false;
         return NULL;
     }
@@ -309,9 +316,8 @@ allocator_t allocator_init_debug(debug_allocator* debug) {
 
 debug_allocator debug_allocator_init(allocator_t internal, allocator_t backing) {
     return (debug_allocator) {
-        ._backing     = backing,
-        ._allocations = map_alloc_info_init_alloc(internal),
-        .fail_after_n = -1,
+        .backing     = backing,
+        .allocations = map_alloc_info_init_alloc(internal),
     };
 }
 
@@ -320,7 +326,7 @@ bool debug_allocator_release(debug_allocator* debug, bool log_leaks) {
 
     u32 leaked_count = 0;
     usize leaked_size = 0;
-    map_iter_t iter = map_alloc_info_iter(debug->_allocations);
+    map_iter_t iter = map_alloc_info_iter(debug->allocations);
 
     while (map_iter_next(&iter)) {
         allocation_info info = *(allocation_info*)iter.value;
@@ -341,7 +347,7 @@ bool debug_allocator_release(debug_allocator* debug, bool log_leaks) {
         log_error("Leaked %.2f %s across %d allocations", size, suffixes[i], leaked_count);
     }
 
-    map_alloc_info_release(&debug->_allocations);
+    map_alloc_info_release(&debug->allocations);
     memset_destroyed(debug, sizeof(debug_allocator));
     return (leaked_count > 0);
 }

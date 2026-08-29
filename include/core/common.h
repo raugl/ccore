@@ -148,7 +148,7 @@ PRINTF_FORMAT(3, 4) void fprintf_color(FILE* restrict stream, cstring restrict c
 
 #define array_front(self)   array_at((self), 0)
 #define array_back(self)    array_at((self), (self).len - 1)
-#define array_at(self, idx) (self).ptr[validate_idx((idx), (self).len)]
+#define array_at(self, idx) (self).data[validate_idx((idx), (self).len)]
 #define array_len(arr)      sizeof((arr)) / sizeof((arr)[0])
 
 static inline usize validate_idx(usize idx, usize len) {

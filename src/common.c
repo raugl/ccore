@@ -122,7 +122,7 @@ bool string_starts_with(string str, string prefix) {
     if (str.len < prefix.len) return false;
 
     for (usize i = 0; i < str.len; ++i) {
-        if (str.ptr[i] != prefix.ptr[i]) return false;
+        if (str.data[i] != prefix.data[i]) return false;
     }
     return true;
 }
@@ -132,7 +132,7 @@ bool string_starts_with_cstr(string str, cstring prefix) {
 
     for (usize i = 0; i < str.len ; ++i) {
         if (prefix[i] == '\0') return true;
-        if (str.ptr[i] != prefix[i]) return false;
+        if (str.data[i] != prefix[i]) return false;
     }
     return false;
 }
@@ -153,7 +153,7 @@ bool cstring_starts_with_str(cstring str, string prefix) {
 
     // for (usize i = 0; i < prefix.len ; ++i) {
     //     if (str[i] == '\0') return true;
-    //     if (prefix.ptr[i] != str[i]) return false;
+    //     if (prefix.data[i] != str[i]) return false;
     // }
     return false;
 }
