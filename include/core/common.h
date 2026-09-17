@@ -72,6 +72,7 @@ typedef __uint128_t u128;
 typedef void* rawptr;
 typedef const char* cstring;
 
+// NOTE: This is just a common default, may not be accurate for any specific platform
 typedef struct cacheline_t {
     alignas(64) u8 _data[64];
 } cacheline_t;
@@ -155,9 +156,9 @@ PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, cstring fmt, ...);
 PRINTF_FORMAT(3, 4) void fprintf_color(FILE* restrict stream, cstring restrict color, cstring restrict fmt, ...);
 
 #define array_len(arr)        sizeof((arr)) / sizeof((arr)[0])
-#define array_at(self, index) (self).data[__ccore_validate_index((index), (self).len)]
+#define array_at(self, index) (self).data[_ccore_validate_index((index), (self).len)]
 
-FORCE_INLINE usize __ccore_validate_index(usize index, usize len) {
+FORCE_INLINE usize _ccore_validate_index(usize index, usize len) {
     if (index < len) return index;
     panic("Out of bounds access");
 }

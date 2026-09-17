@@ -2,16 +2,14 @@
 #include <inttypes.h>
 
 #include "common.h"
+#include "math.h"
 #include "random.h"
-#include "allocator.h"
-#include "debug_allocator.h"
+#include "arena_allocator.h"
 
 // TODO: Add functions which take this in to force debug allocator failures.
 // In that case also make the debug allocator field private.
 typedef struct testing_context {
     arena_t         arena;
-    allocator_t     allocator;
-    debug_allocator _debug_alloc;
     rng_t*          rng;
 } testing_context;
 
@@ -24,24 +22,24 @@ typedef struct testing_case {
 
 // Makes the debug allocator of the testing context fail all allocations, reallocations, or resizes
 #define testing_fail_all_alloc(test) for (                                                          \
-    (test)->_debug_alloc.fail_alloc = true;                                                         \
-    (test)->_debug_alloc.fail_alloc;                                                                \
-    (test)->_debug_alloc.fail_alloc = false                                                         \
+    (test)->arena._fail_everything = true;                                                          \
+    (test)->arena._fail_everything;                                                                 \
+    (test)->arena._fail_everything = false                                                          \
 )
 
 // Makes the debug allocator of the testing context fail all allocations or reallocations
 #define testing_fail_alloc(test) for (                                                              \
-    (test)->_debug_alloc.fail_alloc = true;                                                         \
-    (test)->_debug_alloc.fail_alloc;                                                                \
-    (test)->_debug_alloc.fail_alloc = false                                                         \
+    (test)->arena._fail_alloc = true;                                                               \
+    (test)->arena._fail_alloc;                                                                      \
+    (test)->arena._fail_alloc = false                                                               \
 )
 
 // Makes the debug allocator of the testing context fail all in-place resizes, forcing
 // it to fall back to realloc.
 #define testing_fail_resize(test) for (                                                             \
-    (test)->_debug_alloc.fail_resize = true;                                                        \
-    (test)->_debug_alloc.fail_resize;                                                               \
-    (test)->_debug_alloc.fail_resize = false                                                        \
+    (test)->arena._fail_resize = true;                                                              \
+    (test)->arena._fail_resize;                                                                     \
+    (test)->arena._fail_resize = false                                                              \
 )
 
 // Runs every test in `tests`, prints a summary, returns the number of failures.
@@ -53,12 +51,12 @@ int LLVMFuzzerTestOneInput(const u8* data, usize size);
 // FIXME: Add __LINE__ __FILE__ __func__ to the error message
 #define assert_type_full(prefix, suffix, T, fmt, a, op, b)                                          \
     do {                                                                                            \
-        T assert_tmp_a_ = (a);                                                                      \
-        T assert_tmp_b_ = (b);                                                                      \
-        if (!(assert_tmp_a_ op assert_tmp_b_)) {                                                    \
+        T _assert_tmp_a = (a);                                                                      \
+        T _assert_tmp_b = (b);                                                                      \
+        if (!(_assert_tmp_a op _assert_tmp_b)) {                                                    \
             const char assert_tmp_fmt_[] = "assertion failed: %s %s %s (" prefix "%" fmt suffix     \
                 " %s " prefix "%" fmt suffix ")";                                                   \
-            panic(assert_tmp_fmt_, #a, #op, #b, assert_tmp_a_, #op, assert_tmp_b_);                 \
+            panic(assert_tmp_fmt_, #a, #op, #b, _assert_tmp_a, #op, _assert_tmp_b);                 \
         }                                                                                           \
     } while (0)
 
@@ -67,22 +65,22 @@ int LLVMFuzzerTestOneInput(const u8* data, usize size);
 #define assert_slice(fmt, a, op, b)                                                                 \
     do {                                                                                            \
         PUSH_DIAG_IGNORE_GNU_AUTO_TYPE;                                                             \
-        __auto_type assert_tmp_a_ = (a);                                                            \
-        __auto_type assert_tmp_b_ = (b);                                                            \
+        __auto_type _assert_tmp_a = (a);                                                            \
+        __auto_type _assert_tmp_b = (b);                                                            \
         POP_DIAG_IGNORE;                                                                            \
                                                                                                     \
-        if (assert_tmp_a_.len != assert_tmp_b_.len) {                                               \
+        if (_assert_tmp_a.len != _assert_tmp_b.len) {                                               \
             panic(                                                                                  \
                 "assertion failed: " #a ".len (%zu) != " #b ".len (%zu)",                           \
-                (usize)assert_tmp_a_.len, (usize)assert_tmp_b_.len                                  \
+                (usize)_assert_tmp_a.len, (usize)_assert_tmp_b.len                                  \
             );                                                                                      \
         }                                                                                           \
-        for (usize assert_tmp_i_ = 0; assert_tmp_i_ < assert_tmp_a_.len; ++assert_tmp_i_) {         \
-            if (!(assert_tmp_a_.data[assert_tmp_i_] op assert_tmp_b_.data[assert_tmp_i_])) {        \
+        for (usize _assert_tmp_i = 0; _assert_tmp_i < _assert_tmp_a.len; ++_assert_tmp_i) {         \
+            if (!(_assert_tmp_a.data[_assert_tmp_i] op _assert_tmp_b.data[_assert_tmp_i])) {        \
                 panic(                                                                              \
                     "assertion failed: " #a "[%zu] %s " #b "[%zu] (%" fmt " %s %" fmt ")",          \
-                    assert_tmp_i_, #op, assert_tmp_i_,                                              \
-                    assert_tmp_a_.data[assert_tmp_i_], #op, assert_tmp_b_.data[assert_tmp_i_]       \
+                    _assert_tmp_i, #op, _assert_tmp_i,                                              \
+                    _assert_tmp_a.data[_assert_tmp_i], #op, _assert_tmp_b.data[_assert_tmp_i]       \
                 );                                                                                  \
             }                                                                                       \
         }                                                                                           \

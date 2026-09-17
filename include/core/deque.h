@@ -1,20 +1,23 @@
 #pragma once
-#include "allocator.h"
 #include "common.h"
+#include "arena_allocator.h"
+
+typedef struct raw_deque {
+    arena_t* _arena;
+    u8*      _data;
+    u32      _head, len, capacity;
+} raw_deque;
 
 #define DEQUE_DECL(T) DEQUE_DECL_RAW(T, deque_##T, const T*)
 
 #define DEQUE_DECL_RAW(T, Self, Ptr)                                                                \
     typedef struct Self {                                                                           \
-        T*          _data;                                                                          \
-        allocator_t _allocator;                                                                     \
-        u32         _head, len, capacity;                                                           \
+        arena_t* _arena;                                                                            \
+        T*       _data;                                                                             \
+        u32      _head, len, capacity;                                                              \
     } Self;                                                                                         \
                                                                                                     \
-    Self Self##_init_fixed(T* buffer, usize capacity);                                              \
-    Self Self##_init_alloc(allocator_t allocator);                                                  \
-    void Self##_destroy(Self* self);                                                                \
-                                                                                                    \
+    Self Self##_init(arena_t* arena);                                                               \
     bool Self##_reserve(Self* self, usize capacity);                                                \
     bool Self##_reserve_exact(Self* self, usize capacity);                                          \
     bool Self##_reserve_spare(Self* self, usize count);                                             \
@@ -24,26 +27,35 @@
     bool Self##_push_back(Self* self, T item);                                                      \
     bool Self##_pop_front(Self* self, T* out);                                                      \
     bool Self##_pop_back(Self* self, T* out);                                                       \
-    bool Self##_front(const Self* self, T* out);                                                    \
-    bool Self##_back(const Self* self, T* out);                                                     \
-    T* Self##_at(Self* self, usize index);
+    bool Self##_front(Self self, T** out);                                                          \
+    bool Self##_back(Self self, T** out);
 
 DEQUE_DECL_RAW(u8, deque_u8, const void*)
-DEQUE_DECL(u32)
-DEQUE_DECL(u64)
-DEQUE_DECL(f32)
+
+#define deque_at(self, index) (self)->_data[_ccore_deque_buffer_index(                              \
+        (const void*)((self)),                                                                      \
+        _ccore_validate_index((index), (self)->len)                                                 \
+    )]
+
+FORCE_INLINE usize _ccore_deque_buffer_index(const raw_deque* deque, usize index) {
+    assert(deque != NULL);
+    if (deque->_head + index < deque->capacity) {
+        return deque->_head + index;
+    } else {
+        return deque->_head + index - deque->capacity;
+    }
+}
 
 #ifdef GENERICS_IMPLEMENTATION
 #include "math.h"
 
-// NOTE: This is just a common default, may not be accurate for any specific platform
-#define CACHE_LINE_SIZE 64
-
-static void deque_copy_buffer(deque_u8* deque, u8* new_ptr, usize new_capacity, usize size_of) {
+static void deque_copy_buffer(raw_deque* deque, u8* new_ptr, usize new_capacity, usize size_of) {
     if (deque->_head + deque->len <= deque->capacity) {
-        // ..[aaaaaaaaaa].. => [aaaaaaaaaa]....................
+        // ..[aaaaaaaaaa].. => ..[aaaaaaaaaa]..................
         // [aaaaaaaaaaaaaa] => [aaaaaaaaaaaaaa]................
-        memcpy(new_ptr, deque->_data + deque->_head, deque->len * size_of);
+        if (deque->_head != new_ptr) {
+            memcpy(new_ptr + deque->_head, deque->_data + deque->_head, deque->len * size_of);
+        }
         return;
     }
     const u32 right_len = deque->capacity - deque->_head;
@@ -58,10 +70,10 @@ static void deque_copy_buffer(deque_u8* deque, u8* new_ptr, usize new_capacity, 
     } else if (right_len < left_len) {
         // bb].....[aaaaaaa => ___.....[aaaaaa|bb].............
         // bbbb][aaaaaaaaaa => _____[aaaaaaaaa|bbbb]...........
-        u32 old__head = deque->_head;
+        u32 old_head = deque->_head;
         deque->_head = (u32)new_capacity - right_len;
-        memcpy(new_ptr + deque->_head, deque->_data + old__head, right_len * size_of);
-        memset_destroyed(deque->_data + old__head, right_len * size_of);
+        memcpy(new_ptr + deque->_head, deque->_data + old_head, right_len * size_of);
+        memset_destroyed(deque->_data + old_head, right_len * size_of);
     } else {
         // bbbbbbb]....[aaa => bbbbbbb]....____............[aaa
         // bbbbbbbbb][aaaaa => bbbbbbbbb]______..........[aaaaa
@@ -70,79 +82,56 @@ static void deque_copy_buffer(deque_u8* deque, u8* new_ptr, usize new_capacity, 
     }
 }
 
-static usize deque_buffer_index(deque_u8* queue, usize index) {
-    assert(queue != NULL);
-    if (queue->_head + index < queue->capacity) {
-        return queue->_head + index;
-    } else {
-        return queue->_head + index - queue->capacity;
-    }
-}
-
 #define DEQUE_IMPL(T) DEQUE_IMPL_RAW(T, deque_##T, const T*)
 
 #define DEQUE_IMPL_RAW(T, Self, Ptr)                                                                \
-    Self Self##_init_fixed(T* buffer, usize capacity) {                                             \
-        assert(buffer != NULL);                                                                     \
-        memset_undefined(buffer, capacity * sizeof(T));                                             \
-                                                                                                    \
-        return (Self) {                                                                             \
-            ._data      = buffer,                                                                   \
-            .capacity   = (u32)capacity,                                                            \
-            ._allocator = allocator_init_null(),                                                    \
-        };                                                                                          \
-    }                                                                                               \
-                                                                                                    \
-    Self Self##_init_alloc(allocator_t allocator) {                                                 \
-        assert(allocator.proc != NULL);                                                             \
-        return (Self) { ._allocator = allocator };                                                  \
-    }                                                                                               \
-                                                                                                    \
-    void Self##_destroy(Self* self) {                                                               \
-        assert(self != NULL);                                                                       \
-        mem_free(self->_allocator, self->_data, self->capacity);                                    \
-        memset_destroyed(self, sizeof(Self));                                                       \
+    Self Self##_init(arena_t* arena) {                                                              \
+        assert(arena != NULL);                                                                      \
+        return (Self) { ._arena = arena };                                                          \
     }                                                                                               \
                                                                                                     \
     bool Self##_reserve(Self* self, usize new_capacity) {                                           \
         assert(self != NULL);                                                                       \
-        if (self->capacity >= new_capacity) return true;                                            \
+        if (new_capacity <= self->capacity) return true;                                            \
                                                                                                     \
-        static const usize init_capacity = CACHE_LINE_SIZE / sizeof(T);                             \
-        const usize growth = (new_capacity / 2 + init_capacity);                                    \
+        new_capacity = (self->capacity == 0) ?                                                      \
+            sizeof(cacheline_t) / sizeof(T) :                                                       \
+            max_usize(new_capacity, self->capacity + (self->capacity >> 1));                        \
                                                                                                     \
-        if (growth > UINT32_MAX - new_capacity) return false;                                       \
-        return Self##_reserve_exact(self, new_capacity + growth);                                   \
-    }                                                                                               \
-                                                                                                    \
-    bool Self##_reserve_spare(Self* self, usize count) {                                            \
-        return Self##_reserve(self, self->len + count);                                             \
+        if (new_capacity > UINT32_MAX) return false;                                                \
+        return Self##_reserve_exact(self, new_capacity);                                            \
     }                                                                                               \
                                                                                                     \
     bool Self##_reserve_exact(Self* self, usize new_capacity) {                                     \
         assert(self != NULL);                                                                       \
         if (self->capacity >= new_capacity) return true;                                            \
                                                                                                     \
-        if (mem_resize(self->_allocator, self->_data, self->capacity, new_capacity)) {              \
-            deque_copy_buffer((deque_u8*)self, (u8*)self->_data, new_capacity, sizeof(T));          \
+        if (arena_resize(self->_arena, self->_data, self->capacity, new_capacity)) {                \
+            deque_copy_buffer((void*)self, (u8*)self->_data, new_capacity, sizeof(T));              \
             return true;                                                                            \
         }                                                                                           \
                                                                                                     \
-        T* new_ptr = mem_alloc(self->_allocator, T, new_capacity);                                  \
-        if (new_ptr != NULL) {                                                                      \
-            deque_copy_buffer((deque_u8*)self, (u8*)new_ptr, new_capacity, sizeof(T));              \
-            mem_free(self->_allocator, self->_data, self->capacity);                                \
+        arena_replace_info info;                                                                    \
+        if (arena_begin_replace(self->_arena, self->_data, self->capacity, new_capacity, &info)) {  \
+            deque_copy_buffer((void*)self, info.ptr, new_capacity, sizeof(T));                      \
+            arena_commit_replace(self->_arena, info);                                               \
             self->capacity = (u32)new_capacity;                                                     \
-            self->_data = new_ptr;                                                                  \
+            self->_data = info.ptr;                                                                 \
             return true;                                                                            \
         }                                                                                           \
         return false;                                                                               \
     }                                                                                               \
                                                                                                     \
+    bool Self##_reserve_spare(Self* self, usize count) {                                            \
+        assert(self != NULL);                                                                       \
+        return Self##_reserve(self, self->len + count);                                             \
+    }                                                                                               \
+                                                                                                    \
     bool Self##_push_front_many(Self* self, Ptr items, usize count) {                               \
         assert(self != NULL);                                                                       \
+        assert((count == 0) || (items != NULL));                                                    \
+                                                                                                    \
         if (count == 0) return true;                                                                \
-        assert(items != NULL);                                                                      \
         if (!Self##_reserve_spare(self, count)) return false;                                       \
                                                                                                     \
         if (self->_head < count) {                                                                  \
@@ -160,8 +149,9 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
                                                                                                     \
     bool Self##_push_back_many(Self* self, Ptr items, usize count) {                                \
         assert(self != NULL);                                                                       \
+        assert((count == 0) || (items != NULL));                                                    \
+                                                                                                    \
         if (count == 0) return true;                                                                \
-        assert(items != NULL);                                                                      \
         if (!Self##_reserve_spare(self, count)) return false;                                       \
                                                                                                     \
         /* FIXME: I dont actually insert anything */                                                \
@@ -172,6 +162,7 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
     bool Self##_push_front(Self* self, T item) {                                                    \
         assert(self != NULL);                                                                       \
         if (!Self##_reserve_spare(self, 1)) return false;                                           \
+                                                                                                    \
         if (self->_head == 0) self->_head = self->len;                                              \
         self->_data[--self->_head] = item;                                                          \
         self->len++;                                                                                \
@@ -181,7 +172,8 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
     bool Self##_push_back(Self* self, T item) {                                                     \
         assert(self != NULL);                                                                       \
         if (!Self##_reserve_spare(self, 1)) return false;                                           \
-        self->_data[deque_buffer_index((deque_u8*)self, self->len++)] = item;                       \
+                                                                                                    \
+        self->_data[_ccore_deque_buffer_index((void*)self, self->len++)] = item;                    \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
@@ -191,7 +183,7 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
                                                                                                     \
         if (out) *out = self->_data[self->_head];                                                   \
         memset_destroyed(self->_data + self->_head, sizeof(T));                                     \
-        self->_head = (u32)deque_buffer_index((deque_u8*)self, 1);                                  \
+        self->_head = (u32)_ccore_deque_buffer_index((void*)self, 1);                               \
         self->len--;                                                                                \
         return true;                                                                                \
     }                                                                                               \
@@ -200,31 +192,23 @@ static usize deque_buffer_index(deque_u8* queue, usize index) {
         assert(self != NULL);                                                                       \
         if (self->len == 0) return false;                                                           \
                                                                                                     \
-        const usize index = deque_buffer_index((deque_u8*)self, --self->len);                       \
+        const usize index = _ccore_deque_buffer_index((void*)self, --self->len);                    \
         if (out) *out = self->_data[index];                                                         \
         memset_destroyed(self->_data + index, sizeof(T));                                           \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
-    bool Self##_front(const Self* self, T* out) {                                                   \
-        assert(self != NULL);                                                                       \
+    bool Self##_front(Self self, T** out) {                                                         \
         assert(out != NULL);                                                                        \
-        if (self->len == 0) return false;                                                           \
-        *out = self->_data[self->_head];                                                            \
+        if (self.len == 0) return false;                                                            \
+        *out = &self._data[self._head];                                                             \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
-    bool Self##_back(const Self* self, T* out) {                                                    \
-        assert(self != NULL);                                                                       \
+    bool Self##_back(Self self, T** out) {                                                          \
         assert(out != NULL);                                                                        \
-        if (self->len == 0) return false;                                                           \
-        *out = self->_data[deque_buffer_index((const deque_u8*)self, self->len - 1)];               \
+        if (self.len == 0) return false;                                                            \
+        *out = &self._data[_ccore_deque_buffer_index((void*)&self, self.len - 1)];                  \
         return true;                                                                                \
-    }                                                                                               \
-                                                                                                    \
-    T* Self##_at(Self* self, usize index) {                                                         \
-        assert(self != NULL);                                                                       \
-        if (self->len == 0) return NULL;                                                            \
-        return self->_data + deque_buffer_index((deque_u8*)self, index);                            \
     }
 #endif
