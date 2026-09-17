@@ -1,3 +1,4 @@
+#include <core/math.h>
 #include <core/arena_allocator.h>
 #include <core/tlsf_allocator.h>
 
@@ -25,16 +26,18 @@ FORCE_INLINE bool has_only_head_chunk(arena_t self) {
 
 FORCE_INLINE bool is_head_chunk_fixed(arena_t self) {
     assert((self._append_ptr == NULL) == (self._tail_block == INVALID_BLOCK));
+    tlsf_t* tlsf = _ccore_global_tlsf;
 
     if (self._tail_block == INVALID_BLOCK) return false;
-    return _ccore_global_tlsf->blocks[self._head_block].flags & TLSF_BLOCK_EXTERNAL;
+    return tlsf_blocks(tlsf)[self._head_block].kind == TLSF_BLOCK_EXTERNAL;
 }
 
 FORCE_INLINE bool has_non_fixed_tail_chunk(arena_t self) {
     assert((self._append_ptr == NULL) == (self._tail_block == INVALID_BLOCK));
+    tlsf_t* tlsf = _ccore_global_tlsf;
 
     if (self._tail_block == INVALID_BLOCK) return false;
-    if (_ccore_global_tlsf->blocks[self._tail_block].flags & TLSF_BLOCK_EXTERNAL) {
+    if (tlsf_blocks(tlsf)[self._tail_block].kind == TLSF_BLOCK_EXTERNAL) {
         assert(self._head_block == self._tail_block);
         return false;
     }
@@ -46,7 +49,8 @@ FORCE_INLINE tlsf_block* get_head_chunk(arena_t self) {
     assert(self._head_block != INVALID_BLOCK);
     assert(self._tail_block != INVALID_BLOCK);
 
-    return &_ccore_global_tlsf->blocks[self._head_block];
+    tlsf_t* tlsf = _ccore_global_tlsf;
+    return &tlsf_blocks(tlsf)[self._head_block];
 }
 
 static void assert_canaries(arena_debug_header* header) {
@@ -87,19 +91,26 @@ static void assert_allocation(arena_t self, u8* old_ptr, usize old_size) {
 
     for (tlsf_index block_index = self._head_block;
          block_index != INVALID_BLOCK;
-         block_index = tlsf->blocks[block_index].next_chunk
+         block_index = tlsf_blocks(tlsf)[block_index].next_chunk
     ) {
-        const tlsf_block* block = &tlsf->blocks[block_index];
+        const tlsf_block* block = &tlsf_blocks(tlsf)[block_index];
 
         if (block->ptr <= old_ptr && old_ptr < block->ptr + block->size) {
             header = (void*)block->ptr;
             found_chunk = true;
 
+            // FIXME: This end condition is insufficient, it allows reading from the "wasted"
+            // remainder of each chunk.
             while ((u8*)header < block->ptr + block->size) {
                 if (old_ptr == (u8*)(header + 1)) {
                     found_allocation = true;
                     goto found;
                 }
+                // FIXME: All of that is wrong, if the requested alignment is more than the header's,
+                // then there will be a substantial padding gap (intentional) between the end of the
+                // span of the old alloc and the header of the next one. I should instead turn the
+                // spans into a linked list, and store the offset of the previous one in the arena.
+                // i should compact the bools into a bit field, but then I'm still 4 bits short
                 // NOTE: If the allocation's alignment is less than alignof(arena_debug_header), the
                 // header's span might be just short of the next allocation's header. Because of this
                 // I just align forward here, instead of the multiple places where I edit the span.
@@ -132,7 +143,7 @@ static usize free_and_sum_chunks(arena_t* self) {
     tlsf_index block_index = self->_head_block;
 
     while (block_index != INVALID_BLOCK) {
-        const tlsf_block block = tlsf->blocks[block_index];
+        const tlsf_block block = tlsf_blocks(tlsf)[block_index];
 
 #ifdef DEBUG_ALLOCATOR
         arena_debug_header* header = (void*)block.ptr;
@@ -141,7 +152,7 @@ static usize free_and_sum_chunks(arena_t* self) {
             header = align_forward_ptr((u8*)header + header->span, alignof(arena_debug_header));
         }
 #endif
-        tlsf_free_raw(tlsf, block_index);
+        tlsf_free_block(tlsf, block_index);
         block_index = block.next_chunk;
         total_size += block.size;
     }
@@ -156,6 +167,8 @@ arena_t arena_init_fixed(void* buffer, usize size, bool silence_spillover) {
     assert(buffer != NULL);
     assert(size < UINT32_MAX);
 
+    // FIXME: the tlsf blocks can exhaust, currently it just asserts when that happens. It'd be
+    // pretty annoying to make this falible, and there isn't really anything one can do to recover.
     tlsf_t* tlsf = _ccore_global_tlsf;
     tlsf_index block_index = tlsf_claim_external_block(tlsf, buffer, size);
 
@@ -206,6 +219,7 @@ void* arena_alloc_raw(arena_t* self, usize size, usize align) {
     assert(align <= BLOCK_ALIGNMENT);
     assert(is_pow2(align));
 
+    static_assert(DEBUG_PREFIX_SIZE % alignof(arena_debug_header) == 0, "");
     align = max_usize(align, DEBUG_HEADER_ALIGN);
     if (!arena_alloc_reserve(self, size, align)) return NULL;
 
@@ -246,13 +260,13 @@ static bool arena_alloc_reserve(arena_t* self, usize size, usize align) {
     usize min_size, desired_size, chunk_size;
 
     if (self->_tail_block != INVALID_BLOCK) {
-        tlsf_block* tail_chunk = &tlsf->blocks[self->_tail_block];
+        tlsf_block* tail_chunk = &tlsf_blocks(tlsf)[self->_tail_block];
         desired_size = tail_chunk->size + (tail_chunk->size >> 1);
 
         min_size = (usize)(end_ptr - tail_chunk->ptr);
         chunk_size = tlsf_get_policy_suggested_chunk_size(tlsf, min_size, desired_size);
 
-        if (tlsf_resize_raw(tlsf, self->_tail_block, chunk_size)) {
+        if (tlsf_resize_block(tlsf, self->_tail_block, (u32)chunk_size)) {
             memset_undefined(self->_append_ptr, chunk_size - tail_chunk->size);
             self->_avail_size += chunk_size - tail_chunk->size;
             return true;
@@ -265,10 +279,10 @@ static bool arena_alloc_reserve(arena_t* self, usize size, usize align) {
     chunk_size = tlsf_get_policy_suggested_chunk_size(tlsf, min_size, desired_size);
 
     tlsf_allocation allocation;
-    if (!tlsf_alloc_raw(tlsf, chunk_size, &allocation)) return false;
+    if (!tlsf_alloc_block(tlsf, (u32)chunk_size, &allocation)) return false;
 
     if (self->_tail_block != INVALID_BLOCK) {
-        tlsf->blocks[self->_tail_block].next_chunk = allocation.block_index;
+        tlsf_blocks(tlsf)[self->_tail_block].next_chunk = allocation.block_index;
     } else {
         self->_head_block = allocation.block_index;
     }
@@ -314,13 +328,13 @@ bool arena_resize_raw(arena_t* self, void* old_ptr, usize old_size, usize new_si
         return size_diff <= 0;
     }
     if (size_diff > self->_avail_size) {
-        tlsf_block* tail_chunk = &tlsf->blocks[self->_tail_block];
+        tlsf_block* tail_chunk = &tlsf_blocks(tlsf)[self->_tail_block];
         usize desired_size = tail_chunk->size + (tail_chunk->size >> 1);
 
         usize min_size = (usize)(self->_append_ptr + size_diff - tail_chunk->ptr);
         usize chunk_size = tlsf_get_policy_suggested_chunk_size(tlsf, min_size, desired_size);
 
-        if (!tlsf_resize_raw(tlsf, self->_tail_block, chunk_size)) return false;
+        if (!tlsf_resize_block(tlsf, self->_tail_block, (u32)chunk_size)) return false;
         memset_undefined(self->_append_ptr, chunk_size - tail_chunk->size);
         self->_avail_size += chunk_size - tail_chunk->size;
     }
@@ -392,11 +406,13 @@ void arena_commit_replace(arena_t* self, arena_replace_info info) {
     assert(self != NULL);
     tlsf_t* tlsf = _ccore_global_tlsf;
 
+    // FIXME: if there was a chunk ahead of _prev_tail, its next_chunk link wasnt updated. thus
+    // destroy or validation doesnt work either. switch from next_chunk to prev_chunk to fix this.
     if (info._free_prev) {
         assert(info._prev_tail != self->_tail_block);
         if (self->_head_block == info._prev_tail) {
-            self->_head_block = tlsf->blocks[info._prev_tail].next_chunk;
+            self->_head_block = tlsf_blocks(tlsf)[info._prev_tail].next_chunk;
         }
-        tlsf_free_raw(tlsf, info._prev_tail);
+        tlsf_free_block(tlsf, info._prev_tail);
     }
 }

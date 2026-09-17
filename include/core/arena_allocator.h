@@ -12,6 +12,9 @@ typedef struct arena_t {
     tlsf_index _tail_block;
     union {
         tlsf_index _head_block;
+        // TODO: i've got 2 space bytes, and thats before trying to compact the bools into a bit
+        // field. I should use them to promote _initial_capacity to a u32 and not loose so much
+        // capacity on clear.
         u16 _initial_capacity;
     };
     u16        _tail_live_allocs;

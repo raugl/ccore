@@ -72,6 +72,10 @@ typedef __uint128_t u128;
 typedef void* rawptr;
 typedef const char* cstring;
 
+typedef struct cacheline_t {
+    alignas(64) u8 _data[64];
+} cacheline_t;
+
 // Useful marker annotations around mostly pointers
 #define OUT
 #define NULLABLE
@@ -80,9 +84,6 @@ typedef const char* cstring;
 #define SCANF_FORMAT(fmt_idx, vaargs_idx)  __attribute__((format(scanf, fmt_idx, vaargs_idx)))
 #define PRINTF_FORMAT(fmt_idx, vaargs_idx) __attribute__((format(printf, fmt_idx, vaargs_idx)))
 #define FORCE_INLINE                       static inline __attribute__((__always_inline__))
-
-#define CACHELINE_SIZE  64
-#define CACHELINE_ALIGN 64
 
 PUSH_DIAG_IGNORE_GNU_ZERO_ARGS
 // NOTE: This depends on a gcc/clang extension for macro "overloading" based on the length of
