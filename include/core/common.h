@@ -3,7 +3,7 @@
 #    define _POSIX_C_SOURCE 200809L
 #endif
 
-#include <assert.h>
+#include <assert.h> // TODO: Replace this with my own
 #include <limits.h>
 #include <stdalign.h>
 #include <stdarg.h>
@@ -69,6 +69,7 @@ typedef double f64;
 typedef long double f80;
 typedef __uint128_t u128;
 
+typedef void* rawptr;
 typedef const char* cstring;
 
 // Useful marker annotations around mostly pointers
@@ -79,6 +80,9 @@ typedef const char* cstring;
 #define SCANF_FORMAT(fmt_idx, vaargs_idx)  __attribute__((format(scanf, fmt_idx, vaargs_idx)))
 #define PRINTF_FORMAT(fmt_idx, vaargs_idx) __attribute__((format(printf, fmt_idx, vaargs_idx)))
 #define FORCE_INLINE                       static inline __attribute__((__always_inline__))
+
+#define CACHELINE_SIZE  64
+#define CACHELINE_ALIGN 64
 
 PUSH_DIAG_IGNORE_GNU_ZERO_ARGS
 // NOTE: This depends on a gcc/clang extension for macro "overloading" based on the length of
@@ -93,11 +97,14 @@ POP_DIAG_IGNORE
 #define likely(x)      __builtin_expect(!!(x), 1)
 #define unlikely(x)    __builtin_expect(!!(x), 0)
 #define unreachable()  __builtin_unreachable()
+#define thread_local   _Thread_local
 #define bit_cast(T, x) (*(T*)(&(x)))
+#define bit_sizeof(T)  (sizeof(T) * 8)
+
 #define alignof_expr(expr)                                                                          \
     (__extension__({                                                                                \
         PUSH_DIAG_IGNORE_GNU_ALIGNOF_EXPRESSION                                                     \
-        usize ccore_alignof_expr__ = _Alignof(expr);                                                \
+        usize ccore_alignof_expr__ = alignof(expr);                                                 \
         POP_DIAG_IGNORE                                                                             \
         ccore_alignof_expr__;                                                                       \
     }))
@@ -146,12 +153,10 @@ PRINTF_FORMAT(2, 3) void log_impl(log_level_t level, cstring fmt, ...);
 
 PRINTF_FORMAT(3, 4) void fprintf_color(FILE* restrict stream, cstring restrict color, cstring restrict fmt, ...);
 
-#define array_front(self)   array_at((self), 0)
-#define array_back(self)    array_at((self), (self).len - 1)
-#define array_at(self, idx) (self).data[validate_idx((idx), (self).len)]
-#define array_len(arr)      sizeof((arr)) / sizeof((arr)[0])
+#define array_len(arr)        sizeof((arr)) / sizeof((arr)[0])
+#define array_at(self, index) (self).data[__ccore_validate_index((index), (self).len)]
 
-static inline usize validate_idx(usize idx, usize len) {
-    if (idx < len) return idx;
+FORCE_INLINE usize __ccore_validate_index(usize index, usize len) {
+    if (index < len) return index;
     panic("Out of bounds access");
 }
