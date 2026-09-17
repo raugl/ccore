@@ -3,6 +3,11 @@
 
 #define SLICE_DECL(T) SLICE_DECL_RAW(T, slice_##T)
 
+typedef struct raw_slice {
+    void* data;
+    usize len;
+} raw_slice;
+
 #define SLICE_DECL_RAW(T, Self)                                                                     \
     typedef struct {                                                                                \
         T*    data;                                                                                 \
@@ -17,7 +22,7 @@ SLICE_DECL(u32)
 SLICE_DECL(u64)
 SLICE_DECL(f32)
 SLICE_DECL_RAW(const char, string)
-SLICE_DECL_RAW(void, slice_raw)
+SLICE_DECL_RAW(void, slice_raw) // TODO: Get rid of this
 
 #define cstr(str) (string) { .data = (str), .len = strlen((str)) }
 

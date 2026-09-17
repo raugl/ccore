@@ -1,20 +1,17 @@
-#include "core/common.h"
-#include "core/hash.h"
-
 #if defined(_WIN32)
-#include <io.h>
-#define isatty _isatty
-#define fileno _fileno
-#include <windows.h>
+#   include <io.h>
+#   define isatty _isatty
+#   define fileno _fileno
+#   include <windows.h>
 #endif
 
 #define GENERICS_IMPLEMENTATION
-#include "core/darray.h"
-#include "core/deque.h"
-#include "core/hashmap.h"
-#include "core/pqueue.h"
-#include "core/slice.h"
-#include "core/sort.h"
+#include <core/sort.h>
+#include <core/slice.h>
+#include <core/darray.h>
+#include <core/deque.h>
+#include <core/hashmap.h>
+// #include <core/pqueue.h>
 
 // =================================================================================================
 // Section: Generic instantiations
@@ -30,6 +27,8 @@ static bool cmp_f32(f32 a, f32 b, void* userdata) {
 
 // TODO: I will probably end up getting rid of slices entirely. Manually passing the pointer and
 // size is much easier to manage. Strings are the only useful application of these.
+// NOTE: Actually they do come in handy when I need to store a data+len. Keep them, but don't add
+// functions for them.
 SLICE_IMPL(u8)
 SLICE_IMPL(u32)
 SLICE_IMPL(u64)

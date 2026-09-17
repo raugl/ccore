@@ -1,5 +1,5 @@
-#include "core/hash.h"
-#include "core/random.h"
+#include <core/hash.h>
+#include <core/random.h>
 
 static const u64 rapid_secret[8] = {
     0x2d358dccaa6c78a5ull, 0x8bb84b93962eacc9ull, 0x4b33a62ed433d4a3ull, 0x4d5a2da51de1aa47ull,
