@@ -1,6 +1,7 @@
 #pragma once
-#include "allocator.h"
+#include "common.h"
 #include "hashmap.h"
+#include "allocator.h"
 
 typedef struct allocation_info {
     usize size;
@@ -13,8 +14,9 @@ HASHMAP_DECL_RAW(void*, allocation_info, map_alloc_info)
 typedef struct debug_allocator {
     allocator_t    backing;
     map_alloc_info allocations;
-    bool           fail_next_alloc;
-    bool           fail_next_resize;
+    bool           fail_all;
+    bool           fail_alloc;
+    bool           fail_resize;
 } debug_allocator;
 
 debug_allocator debug_allocator_init(allocator_t internal, allocator_t backing);

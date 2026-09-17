@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#include <core/common.h>
 #include <core/hash.h>
 #include <core/darray.h>
 #include <core/allocator.h>
@@ -33,7 +32,7 @@ static void drain_pipe(int fd, darray_u8* output) {
     while (true) {
         isize n = read(fd, buf, sizeof(buf));
         if (n <= 0) break;
-        if (!darray_u8_push_many(output, buf, (usize)n)) panic("Test runner ran out of memory");
+        if (!darray_u8_append_many(output, buf, (usize)n)) panic("Test runner ran out of memory");
     }
 }
 
@@ -209,16 +208,15 @@ u32 run_test_suite(const testing_case* tests, usize count, i32 argc, cstring arg
             }
 
             if (output.len > 0) {
-                fwrite(output.ptr, 1, output.len, stream);
-                if (output.ptr[output.len - 1] != '\n') putc('\n', stream);
+                fwrite(output.data, 1, output.len, stream);
+                if (output.data[output.len - 1] != '\n') putc('\n', stream);
             }
         }
     }
 
-    // FIXME: I'd rather this was printed just once at the end. Now I need to make this function
-    // rentrant
+    // FIXME: I'd rather this was printed just once at the end. Now I need to make this function rentrant
     printf("\nRan %zu tests, %u failed\n", count, failures);
-    darray_u8_release(&output);
+    darray_u8_destroy(&output);
     return failures;
 }
 

@@ -9,6 +9,8 @@ typedef enum allocator_operation {
     ALLOCATOR_OPERATION_FREE,
 } allocator_operation;
 
+#define ALLOCATOR_RESIZE_SUCCESS ((void*)sizeof(max_align_t))
+
 typedef void* (*allocator_proc)(
     allocator_operation op,
     void* self,
@@ -81,7 +83,7 @@ allocator_t allocator_init_arena(arena_t* arena);
 
 arena_t arena_init_fixed(void* buffer, usize size);
 arena_t arena_init_alloc(allocator_t allocator, usize size);
-void arena_release(arena_t* self);
+void arena_destroy(arena_t* self);
 void arena_clear(arena_t* self);
 arena_t arena_checkpoint(arena_t* self);
 void arena_rollback(arena_t* self, arena_t checkpoint);

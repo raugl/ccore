@@ -1,9 +1,12 @@
 #define GENERICS_IMPLEMENTATION
-#include "core/allocator.h"
-#include "core/debug_allocator.h"
-#include "core/math.h"
+#include <core/allocator.h>
+#include <core/debug_allocator.h>
+#include <core/math.h>
 
 static void* null_allocator_proc(allocator_operation op, void* self, void* old_ptr, usize old_size, usize new_size, usize align) {
+    assert(op < 4);
+    assert(self != NULL);
+
     (void)op, (void)self, (void)old_ptr, (void)old_size, (void)new_size, (void)align;
     return NULL;
 }
@@ -13,7 +16,9 @@ allocator_t allocator_init_null(void) {
 }
 
 static void* malloc_allocator_proc(allocator_operation op, void* self, void* old_ptr, usize old_size, usize new_size, usize align) {
+    assert(op < 4);
     (void)self, (void)old_size;
+
     switch (op) {
     case ALLOCATOR_OPERATION_ALLOC:
         return aligned_alloc(align, new_size);
@@ -25,6 +30,7 @@ static void* malloc_allocator_proc(allocator_operation op, void* self, void* old
         free(old_ptr);
         return NULL;
     }
+    unreachable();
 }
 
 allocator_t allocator_init_malloc(void) {
@@ -32,17 +38,21 @@ allocator_t allocator_init_malloc(void) {
 }
 
 static void* arena_allocator_proc(allocator_operation op, void* self, void* old_ptr, usize old_size, usize new_size, usize align) {
+    assert(op < 4);
+    assert(self != NULL);
+
     switch (op) {
     case ALLOCATOR_OPERATION_ALLOC:
         return arena_alloc_raw(self, new_size, align);
     case ALLOCATOR_OPERATION_REALLOC:
         return arena_realloc_raw(self, old_ptr, old_size, new_size, align);
     case ALLOCATOR_OPERATION_RESIZE:
-        return arena_resize_raw(self, old_ptr, old_size, new_size) ? (void*)sizeof(max_align_t) : NULL;
+        return arena_resize_raw(self, old_ptr, old_size, new_size) ? ALLOCATOR_RESIZE_SUCCESS : NULL;
     case ALLOCATOR_OPERATION_FREE:
         arena_free_raw(self, old_ptr, old_size);
         return NULL;
     }
+    unreachable();
 }
 
 allocator_t allocator_init_arena(arena_t* arena) {
@@ -70,7 +80,7 @@ arena_t arena_init_alloc(allocator_t allocator, usize size) {
     };
 }
 
-void arena_release(arena_t* self) {
+void arena_destroy(arena_t* self) {
     assert(self != NULL);
     mem_free(self->allocator, self->ptr, self->capacity);
     memset(self, 0xDE, sizeof(arena_t));
@@ -213,6 +223,9 @@ static void assert_allocation(allocation_info* info, allocator_operation operati
 // hope for the best. I should use the currently useless `align` field from `allocation_info` to fix
 // this.
 static void* debug_allocator_proc(allocator_operation op, void* self_, void* old_ptr, usize old_size, usize new_size, usize align) {
+    assert(op < 4);
+    assert(self_ != NULL);
+
     debug_allocator* self = self_;
     const allocation_info new_info = {
         .size  = new_size,
@@ -222,12 +235,9 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
 
     switch (op) {
     case ALLOCATOR_OPERATION_ALLOC: {
-        if (self->fail_next_alloc) {
-            self->fail_next_alloc = false;
-            return NULL;
-        }
+        if (self->fail_alloc || self->fail_all) return NULL;
 
-        if (!map_alloc_info_ensure_capacity(&self->allocations, self->allocations.len + 1)) {
+        if (!map_alloc_info_reserve_spare(&self->allocations, 1)) {
             log_error("debug_allocator metadata allocation failed");
             return NULL;
         }
@@ -237,18 +247,15 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
         if (!ptr) return NULL;
 
         memset_undefined(ptr, new_size);
-        assert(map_alloc_info_put(&self->allocations, ptr, new_info));
+        assert(map_alloc_info_insert(&self->allocations, ptr, new_info));
         return ptr + CANARY_SIZE;
     }
     case ALLOCATOR_OPERATION_REALLOC: {
-        allocation_info* info = old_ptr ? map_alloc_info_get(&self->allocations, old_ptr) : NULL;
+        allocation_info* info = old_ptr ? map_alloc_info_get(self->allocations, old_ptr) : NULL;
         if (old_ptr) assert_allocation(info, op, old_ptr, old_size);
-        if (self->fail_next_alloc) {
-            self->fail_next_alloc = false;
-            return NULL;
-        }
+        if (self->fail_alloc || self->fail_all) return NULL;
 
-        if (!map_alloc_info_ensure_capacity(&self->allocations, self->allocations.len + 1)) {
+        if (!map_alloc_info_reserve_spare(&self->allocations, 1)) {
             log_error("debug_allocator metadata allocation failed");
             return NULL;
         }
@@ -267,16 +274,13 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
         // for libc's `realloc`, and even for my custom allocators I should still request them
         // to poison the memory instead of me trying to do it after its been already released.
 
-        assert(map_alloc_info_put(&self->allocations, ptr, new_info));
+        assert(map_alloc_info_insert(&self->allocations, ptr, new_info));
         return ptr + CANARY_SIZE;
     }
     case ALLOCATOR_OPERATION_RESIZE: {
-        allocation_info* info = map_alloc_info_get(&self->allocations, old_ptr);
+        allocation_info* info = map_alloc_info_get(self->allocations, old_ptr);
         assert_allocation(info, op, old_ptr, old_size);
-        if (self->fail_next_resize) {
-            self->fail_next_resize = false;
-            return NULL;
-        }
+        if (self->fail_resize || self->fail_all) return NULL;
 
         old_size += CANARY_SIZE * 2;
         new_size += CANARY_SIZE * 2;
@@ -296,7 +300,7 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
     }
     case ALLOCATOR_OPERATION_FREE: {
         if (old_ptr == NULL) return NULL;
-        allocation_info* info = map_alloc_info_get(&self->allocations, old_ptr);
+        allocation_info* info = map_alloc_info_get(self->allocations, old_ptr);
         assert_allocation(info, op, old_ptr, old_size);
 
         old_size += CANARY_SIZE * 2;
@@ -308,6 +312,7 @@ static void* debug_allocator_proc(allocator_operation op, void* self_, void* old
         return NULL;
     }
     }
+    unreachable();
 }
 
 allocator_t allocator_init_debug(debug_allocator* debug) {
@@ -326,9 +331,9 @@ bool debug_allocator_release(debug_allocator* debug, bool log_leaks) {
 
     u32 leaked_count = 0;
     usize leaked_size = 0;
-    map_iter_t iter = map_alloc_info_iter(debug->allocations);
+    map_iterator iter = map_alloc_info_iterator(debug->allocations);
 
-    while (map_iter_next(&iter)) {
+    while (map_iterator_next(&iter)) {
         allocation_info info = *(allocation_info*)iter.value;
         if (info.alive) {
             leaked_size += info.size;
@@ -347,9 +352,9 @@ bool debug_allocator_release(debug_allocator* debug, bool log_leaks) {
         log_error("Leaked %.2f %s across %d allocations", size, suffixes[i], leaked_count);
     }
 
-    map_alloc_info_release(&debug->allocations);
+    map_alloc_info_destroy(&debug->allocations);
     memset_destroyed(debug, sizeof(debug_allocator));
     return (leaked_count > 0);
 }
 
-HASHMAP_IMPL_RAW(void*, allocation_info, map_alloc_info, hash_ptr, equal_bytes)
+HASHMAP_IMPL_RAW(void*, allocation_info, map_alloc_info, hash_ptr, equal_bytes, 70)

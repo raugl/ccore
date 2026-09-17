@@ -1,9 +1,10 @@
 #pragma once
 #include <inttypes.h>
-#include "allocator.h"
-#include "debug_allocator.h"
+
 #include "common.h"
 #include "random.h"
+#include "allocator.h"
+#include "debug_allocator.h"
 
 // TODO: Add functions which take this in to force debug allocator failures.
 // In that case also make the debug allocator field private.
@@ -21,15 +22,27 @@ typedef struct testing_case {
     testing_proc proc;
 } testing_case;
 
-// Applies to realloc too
-FORCE_INLINE void testing_fail_next_alloc(testing_context* test) {
-    test->_debug_alloc.fail_next_alloc = true;
-}
+// Makes the debug allocator of the testing context fail all allocations, reallocations, or resizes
+#define testing_fail_all_alloc(test) for (                                                          \
+    (test)->_debug_alloc.fail_alloc = true;                                                         \
+    (test)->_debug_alloc.fail_alloc;                                                                \
+    (test)->_debug_alloc.fail_alloc = false                                                         \
+)
 
-// Fails the next in-place resize, forcing falling back to realloc
-FORCE_INLINE void testing_fail_next_resize(testing_context* test) {
-    test->_debug_alloc.fail_next_resize = true;
-}
+// Makes the debug allocator of the testing context fail all allocations or reallocations
+#define testing_fail_alloc(test) for (                                                              \
+    (test)->_debug_alloc.fail_alloc = true;                                                         \
+    (test)->_debug_alloc.fail_alloc;                                                                \
+    (test)->_debug_alloc.fail_alloc = false                                                         \
+)
+
+// Makes the debug allocator of the testing context fail all in-place resizes, forcing
+// it to fall back to realloc.
+#define testing_fail_resize(test) for (                                                             \
+    (test)->_debug_alloc.fail_resize = true;                                                        \
+    (test)->_debug_alloc.fail_resize;                                                               \
+    (test)->_debug_alloc.fail_resize = false                                                        \
+)
 
 // Runs every test in `tests`, prints a summary, returns the number of failures.
 u32 run_test_suite(const testing_case* tests, usize count, i32 argc, cstring argv[]);
