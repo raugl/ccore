@@ -7,17 +7,21 @@ FORCE_INLINE bool is_block_free(const tlsf_t* self, tlsf_index block_index) {
 }
 
 FORCE_INLINE usize round_up_block_size(usize size) {
-    return (size + MIN_BLOCK_SIZE - 1) & (MIN_BLOCK_SIZE - 1);
+    return (size + MIN_BLOCK_SIZE - 1) & ~(usize)(MIN_BLOCK_SIZE - 1);
 }
 
 // Returns the index of the first set bit which is >= start. If not found, returns 0.
 FORCE_INLINE u16 find_first_set_after(u32 bits, u16 start) {
     u32 mask = (1u << start) - 1;
     u32 bits_after = bits & ~mask;
-    if (bits_after == 0) {
-        return 0;
-    }
-    return (u16)__builtin_ctz(bits_after);
+    return (bits_after == 0) ? UINT16_MAX : (u16)__builtin_ctz(bits_after);
+}
+
+FORCE_INLINE u16 get_largest_bin_index(const tlsf_t* self) {
+    assert(self != NULL);
+    const u16 top_index = log2_u32(self->top_bins);
+    const u16 bottom_index = log2_u32(self->bottom_bins[top_index]);
+    return (u16)(top_index << 4) + bottom_index;
 }
 
 // 336 total bins, 21 top level, 16 bottom level, 256 as the smallest size
@@ -31,13 +35,15 @@ FORCE_INLINE u16 map_size_to_bin(u32 size, bool round_up) {
     u32 round_up_mask = (1u << shift) - 1;
 
     u16 bin_index = (u16)(top_index << 4) + bottom_index - 1;
-    if (round_up && bin_index < 334 && (size & round_up_mask)) {
+    if (round_up && bin_index < TLSF_BIN_COUNT  && (size & round_up_mask)) {
         bin_index++;
     }
     return bin_index;
 }
 
 FORCE_INLINE u32 map_bin_to_size(u16 bin_index) {
+    assert(bin_index < TLSF_BIN_COUNT);
+
     u32 top_index = (bin_index + 1) >> 4;
     u32 bottom_index = (bin_index + 1) & 15;
     if (top_index == 0) {
@@ -49,7 +55,7 @@ FORCE_INLINE u32 map_bin_to_size(u16 bin_index) {
 
 FORCE_INLINE tlsf_index claim_block_index(tlsf_t* self) {
     assert(self->unclaimed_blocks > 0);
-    return tlsf_block_pool(self)[--self->unclaimed_blocks];
+    return tlsf_unclaimed_pool(self)[--self->unclaimed_blocks];
 }
 
 FORCE_INLINE void unclaim_block_index(tlsf_t* self, tlsf_index block_index) {
@@ -57,7 +63,7 @@ FORCE_INLINE void unclaim_block_index(tlsf_t* self, tlsf_index block_index) {
     assert(self->unclaimed_blocks < self->metadata_capacity);
     assert(tlsf_blocks(self)[block_index].kind != TLSF_BLOCK_UNCLAIMED);
 
-    tlsf_block_pool(self)[self->unclaimed_blocks++] = block_index;
+    tlsf_unclaimed_pool(self)[self->unclaimed_blocks++] = block_index;
 }
 
 // Insert a slice of memory as a free block into the appropriate bin's linked list.
@@ -66,8 +72,9 @@ static void insert_free_block(tlsf_t* self, void* buffer, u32 size, tlsf_block_k
     assert(buffer != NULL);
     assert(size <= UINT32_MAX);
     assert(size % MIN_BLOCK_SIZE == 0);
+    assert(kind != TLSF_BLOCK_UNCLAIMED);
+    assert(kind != TLSF_BLOCK_EXTERNAL);
     assert(is_aligned_ptr(buffer, BLOCK_ALIGNMENT));
-    assert(kind != TLSF_BLOCK_UNCLAIMED && kind != TLSF_BLOCK_EXTERNAL);
 
     const u16 bin_index = map_size_to_bin(size, false);
     const u16 top_index = bin_index >> 4;
@@ -85,15 +92,14 @@ static void insert_free_block(tlsf_t* self, void* buffer, u32 size, tlsf_block_k
         .size      = size,
         .kind      = kind,
         .flags     = TLSF_BLOCK_HEAD,
-        .prev_free = bin_index,
+        .bin_index = bin_index,
         .next_free = head_index,
         .prev_phys = prev_phys,
         .next_phys = next_phys,
     };
     if (head_index != INVALID_BLOCK) {
-        tlsf_block* old_head = &tlsf_blocks(self)[head_index];
-        old_head->prev_free = block_index;
-        old_head->flags = 0;
+        tlsf_blocks(self)[head_index].prev_free = block_index;
+        tlsf_blocks(self)[head_index].flags = 0;
     }
     if (prev_phys != INVALID_BLOCK) {
         tlsf_blocks(self)[prev_phys].next_phys = block_index;
@@ -104,39 +110,47 @@ static void insert_free_block(tlsf_t* self, void* buffer, u32 size, tlsf_block_k
     tlsf_bin_heads(self)[bin_index] = block_index;
 }
 
-static void remove_free_block(tlsf_t* self, tlsf_index block_index) {
+FORCE_INLINE tlsf_block* remove_head_block(tlsf_t* self, tlsf_index block_index, u16 bin_index) {
     assert(self != NULL);
-    assert(0 < block_index);
+    assert(block_index != INVALID_BLOCK);
     assert(block_index < self->metadata_capacity);
 
     tlsf_block* block = &tlsf_blocks(self)[block_index];
+    assert(block->kind != TLSF_BLOCK_UNCLAIMED && block->kind != TLSF_BLOCK_EXTERNAL);
+    assert(block->flags == TLSF_BLOCK_HEAD);
+
+    tlsf_bin_heads(self)[bin_index] = block->next_free;
     self->free_size -= block->size;
 
-    assert(block->kind != TLSF_BLOCK_UNCLAIMED && block->kind != TLSF_BLOCK_EXTERNAL);
-    assert((block->flags & TLSF_BLOCK_ALLOCATED) == 0);
+    const u16 top_index = bin_index >> 4;
+    const u16 bottom_index = bin_index & 15;
+
+    if (block->next_free != INVALID_BLOCK) {
+        tlsf_blocks(self)[block->next_free].bin_index = bin_index;
+        tlsf_blocks(self)[block->next_free].flags = TLSF_BLOCK_HEAD;
+    } else {
+        // The bottom bin is now empty, zero its corresponding bit
+        self->bottom_bins[top_index] &= ~(1u << bottom_index);
+
+        // If all bottom bins are now empty, zero the corresponding top bit
+        if (self->bottom_bins[top_index] == 0) {
+            self->top_bins &= ~(1u << top_index);
+        }
+    }
+    return block;
+}
+
+static void remove_free_block(tlsf_t* self, tlsf_index block_index) {
+    assert(self != NULL);
+    assert(block_index != INVALID_BLOCK);
+    assert(block_index < self->metadata_capacity);
+
+    tlsf_block* block = &tlsf_blocks(self)[block_index];
 
     if (block->flags & TLSF_BLOCK_HEAD) {
-        const u16 bin_index = block->prev_free;
-        const u16 top_index = bin_index >> 4;
-        const u16 bottom_index = bin_index & 15;
-
-        tlsf_bin_heads(self)[bin_index] = block->next_free;
-        block->flags = 0;
-
-        if (block->next_free != INVALID_BLOCK) {
-            tlsf_block* new_head = &tlsf_blocks(self)[block->next_free];
-            new_head->prev_free = bin_index;
-            new_head->flags = TLSF_BLOCK_HEAD;
-        } else {
-            // The bottom bin is now empty, zero its corresponding bit
-            self->bottom_bins[top_index] &= ~(1u << bottom_index);
-
-            // If all bottom bins are now empty, zero the corresponding top bit
-            if (self->bottom_bins[top_index] == 0) {
-                self->top_bins &= ~(1u << top_index);
-            }
-        }
+        remove_head_block(self, block_index, block->bin_index);
     } else {
+        assert(block->flags == 0);
         tlsf_blocks(self)[block->prev_free].next_free = block->next_free;
 
         if (block->next_free != INVALID_BLOCK) {
@@ -160,11 +174,10 @@ static bool reserve_new_backing_region(tlsf_t* self) {
         return false; // Out of backing memory
     }
     insert_free_block(self, new_region, region_size, TLSF_BLOCK_MANAGED, INVALID_BLOCK, INVALID_BLOCK);
-    self->backing_size += region_size;
 
     assert(self->backing_regions_len < array_len(self->backing_regions));
     self->backing_regions[self->backing_regions_len++] = new_region;
-
+    self->backing_size += region_size;
 
     self->next_region_size += self->next_region_size >> 1;
     if (self->next_region_size < region_size) {
@@ -175,51 +188,49 @@ static bool reserve_new_backing_region(tlsf_t* self) {
 
 // Returns a structure containing the amount of free space remaining, as well as the
 // largest amount that can be allocated at once.
-tlsf_storage_report tlsf_get_storage_report(tlsf_t self) {
+tlsf_storage_report tlsf_get_storage_report(const tlsf_t* self) {
     tlsf_storage_report report = {
-        .free_size = self.free_size,
+        .free_size = self->free_size,
     };
-    if (report.free_size > 0 && self.top_bins != 0) {
-        const u32 top_index = log2_u32(self.top_bins);
-        const u32 bottom_index = log2_u32(self.bottom_bins[top_index]);
-        const u32 bin_index = (top_index << 4) + bottom_index;
-
-        report.largest_free_block = map_bin_to_size((u16)bin_index);
+    if (report.free_size > 0 && self->top_bins != 0) {
+        const u16 bin_index = get_largest_bin_index(self);
+        report.largest_free_block = map_bin_to_size(bin_index);
         assert(report.largest_free_block <= report.free_size);
     }
     return report;
 }
 
 // Returns detailed information about the number of allocations in each bin.
-tlsf_storage_report_full tlsf_get_storage_report_full(tlsf_t self) {
+tlsf_storage_report_full tlsf_get_storage_report_full(const tlsf_t* self) {
     tlsf_storage_report_full report = {0};
 
-    for (u16 bin_index = 0; bin_index < 320; ++bin_index) {
-        u32 block_index = tlsf_bin_heads(&self)[bin_index];
+    for (u16 bin_index = 0; bin_index < TLSF_BIN_COUNT; ++bin_index) {
+        u32 block_index = tlsf_bin_heads(self)[bin_index];
 
         tlsf_storage_report_bin* bin_report = &report.free_bins[bin_index];
         bin_report->bin_size = map_bin_to_size(bin_index);
         bin_report->block_count = 0;
 
         while (block_index != INVALID_BLOCK) {
-            assert(0 < block_index && block_index < self.metadata_capacity);
-            block_index = tlsf_blocks(&self)[block_index].next_free;
+            assert(block_index < self->metadata_capacity);
+            block_index = tlsf_blocks(self)[block_index].next_free;
             bin_report->block_count++;
         }
     }
     return report;
 }
 
-// FIXME: I should enforce some kind of alignment for buffer, otherwise I need to add a few more
-// align_forward_ptr in the arena's implementation. more specifically for the first allocation
-// within a chunk in debug mode. alignof(arena_debug_header) wants buffer to be at least as much.
 tlsf_index tlsf_claim_external_block(tlsf_t* self, void* buffer, usize size) {
     assert(self != NULL);
     assert(buffer != NULL);
     assert(size <= UINT32_MAX);
 
     tlsf_index block_index = claim_block_index(self);
-    tlsf_blocks(self)[block_index] = (tlsf_block) {
+    tlsf_block* block = &tlsf_blocks(self)[block_index];
+    assert(block->kind == TLSF_BLOCK_UNCLAIMED);
+    assert(block->flags == 0);
+
+    *block = (tlsf_block) {
         .ptr   = buffer,
         .size  = (u32)size,
         .kind  = TLSF_BLOCK_EXTERNAL,
@@ -246,31 +257,32 @@ usize tlsf_get_policy_suggested_chunk_size(const tlsf_t* self, usize min_size, u
     assert(min_size <= UINT32_MAX);
     assert(desired_size <= UINT32_MAX);
 
-    const u16 max_top_index = (u16)(31 - __builtin_clz(self->top_bins));
-    const u16 max_bottom_index = (u16)(15 - __builtin_clz(self->bottom_bins[max_top_index]));
-    const u16 max_bin_index = (u16)(max_top_index << 4) + max_bottom_index;
-
+    if (self->top_bins == 0) {
+        return round_up_block_size(desired_size);
+    }
     const f32 utilization = (f32)(self->backing_size - self->free_size) / (f32)self->backing_size;
-    const u32 max_bin_size = map_bin_to_size(max_bin_index);
+    const u16 largest_bin_index = get_largest_bin_index(self);
+    const u32 largest_bin_size = map_bin_to_size(largest_bin_index);
 
-    if (desired_size > max_bin_size && utilization < self->min_utilization) {
-        desired_size = max_bin_size;
+    if (desired_size > largest_bin_size && utilization < self->min_utilization) {
+        desired_size = largest_bin_size;
     }
     min_size = round_up_block_size(min_size);
     return max_usize(min_size, desired_size);
 }
 
-bool tlsf_init(tlsf_t* self, usize max_allocations, usize backing_capacity, f32 min_utilization) {
-    // NOTE: If backing_capacity > UINT32_MAX, then I could instead just insert multiple backing
+bool tlsf_init(tlsf_t* self, usize max_allocations, usize initial_capacity, f32 min_utilization) {
+    // NOTE: If initial_capacity > UINT32_MAX, then I could instead just insert multiple backing
     // regions, until they sum up to the requested capacity. But I don't think its that common to
     // want to reserve 4GB+ at startup, per thread potentially, so the effort doesn't seem worth it.
     assert(self != NULL);
-    assert(backing_capacity < UINT32_MAX);
+    assert(initial_capacity < UINT32_MAX);
     assert(max_allocations < TLSF_INDEX_MAX);
 
     // PERF: Align to page boundary so the smallest 16/32 bin head indices are always hot
     static_assert(alignof(tlsf_index) < alignof(cacheline_t), "");
     static_assert(alignof(tlsf_block) < alignof(cacheline_t), "");
+    static_assert(INVALID_BLOCK == 0, "");
 
     usize metadata_size = tlsf_metadata_buffer_size(max_allocations);
     u8* metadata_buffer = aligned_alloc(alignof(cacheline_t), metadata_size);
@@ -280,27 +292,27 @@ bool tlsf_init(tlsf_t* self, usize max_allocations, usize backing_capacity, f32 
         .min_utilization   = min_utilization,
         .metadata_buffer   = metadata_buffer,
         .metadata_capacity = (u32)max_allocations,
-        .unclaimed_blocks    = (u32)max_allocations,
-        .next_region_size  = (u32)round_up_block_size(backing_capacity),
+        .unclaimed_blocks  = (u32)max_allocations - 1,
+        .next_region_size  = (u32)round_up_block_size(initial_capacity),
     };
-    for (u32 i = 0; i < self->metadata_capacity; ++i) {
-        tlsf_block_pool(self)[i] = (tlsf_index)(self->metadata_capacity - i - 1);
+    // NOTE: Index 0 is a sentinel (INVALID_BLOCK), don't insert it as a available block
+    for (u32 i = 0; i < max_allocations - 1; ++i) {
+        tlsf_unclaimed_pool(self)[i] = (tlsf_index)(max_allocations - i - 1);
     }
     return true;
 }
 
-bool tlsf_insert_backing_region(tlsf_t* self, void* buffer, usize size) {
+// Will panic if TLSF metadata capacity is all used up. That is a failed inital configuration
+// assumption, there aren't many recovery options, if any.
+void tlsf_insert_fixed_backing_region(tlsf_t* self, void* buffer, usize size) {
     assert(self != NULL);
     assert(buffer != NULL);
     assert(size <= UINT32_MAX);
     assert(size % MIN_BLOCK_SIZE == 0);
     assert(is_aligned_ptr(buffer, BLOCK_ALIGNMENT));
 
-    if (self->unclaimed_blocks == 0) return false; // Out of metadata memory
-
     insert_free_block(self, buffer, (u32)size, TLSF_BLOCK_FIXED, INVALID_BLOCK, INVALID_BLOCK);
     self->backing_size += size;
-    return true;
 }
 
 // TODO: Change the logic to instead scan and validate all the blocks based on the bool argument.
@@ -356,61 +368,36 @@ bool tlsf_alloc_block(tlsf_t* self, u32 size, tlsf_allocation* allocation) {
 
     u16 bin_index = map_size_to_bin((u32)size, true);
     u16 top_index = bin_index >> 4;
-    u16 bottom_index = bin_index & 15;
 
     // Try to get a bin which is as big or bigger than the requested size.
-    if (!(bottom_index = find_first_set_after(self->bottom_bins[top_index], bottom_index))) {
-
+    u16 bottom_index = find_first_set_after(self->bottom_bins[top_index], bin_index & 15);
+    if (bottom_index == UINT16_MAX) {
         // The bottom level cannot supply it, find the next smallest top level.
         // If there are no bins large enough, try allocate another backing region of memory.
-        if (!(top_index = find_first_set_after(self->top_bins, top_index + 1))) {
-            if (!reserve_new_backing_region(self)) {
-                return false; // Out of backing memory
-            }
+        top_index = find_first_set_after(self->top_bins, top_index + 1);
+
+        if (top_index == UINT16_MAX) {
+            if (!reserve_new_backing_region(self)) return false; // Out of backing memory
             top_index = find_first_set_after(self->top_bins, top_index + 1);
-            assert(top_index != 0);
+            assert(top_index != UINT16_MAX);
         }
         // Got a resident top level, find the smallest bottom level bin inside that.
         bottom_index = (u16)__builtin_ctz(self->bottom_bins[top_index]);
     }
+
     bin_index = (u16)(top_index << 4) + bottom_index;
-
     const tlsf_index block_index = tlsf_bin_heads(self)[bin_index];
-    tlsf_block* block = &tlsf_blocks(self)[block_index];
-
-    assert(block->kind != TLSF_BLOCK_UNCLAIMED && block->kind != TLSF_BLOCK_EXTERNAL);
-    assert(block->flags == TLSF_BLOCK_HEAD);
-
-    tlsf_bin_heads(self)[bin_index] = block->next_free;
-    self->free_size -= block->size;
-
-    if (block->next_free != INVALID_BLOCK) {
-        tlsf_block* new_head = &tlsf_blocks(self)[block->next_free];
-        new_head->prev_free = bin_index;
-        new_head->flags = TLSF_BLOCK_HEAD;
-    } else {
-        // The bottom bin is now empty, zero its corresponding bit
-        self->bottom_bins[top_index] &= ~(1u << bottom_index);
-
-        // If all bottom bins are now empty, zero the corresponding top bit
-        if (self->bottom_bins[top_index] == 0) {
-            self->top_bins &= ~(1u << top_index);
-        }
-    }
+    tlsf_block* block = remove_head_block(self, block_index, bin_index);
 
     const u32 remaining_size = block->size - size;
     if (remaining_size > 0) {
         insert_free_block(self, block->ptr + size, remaining_size, block->kind, block_index, block->next_phys);
     }
+    block->size = size;
+    block->flags = TLSF_BLOCK_ALLOCATED;
+    block->prev_free = INVALID_BLOCK;
+    block->next_free = INVALID_BLOCK;
 
-    *block = (tlsf_block) {
-        .ptr       = block->ptr,
-        .size      = size,
-        .kind      = block->kind,
-        .flags     = TLSF_BLOCK_ALLOCATED,
-        .next_phys = block->next_phys,
-        .prev_phys = block->prev_phys,
-    };
     *allocation = (tlsf_allocation) {
         .size        = size,
         .ptr         = block->ptr,
@@ -426,15 +413,18 @@ bool tlsf_resize_block(tlsf_t* self, tlsf_index block_index, u32 new_size) {
     assert(block_index < self->metadata_capacity);
 
     tlsf_block* block = &tlsf_blocks(self)[block_index];
-    if (block->next_phys == INVALID_BLOCK) return false;
-    if (block->kind == TLSF_BLOCK_EXTERNAL) return false;
-
     assert(block->kind != TLSF_BLOCK_UNCLAIMED);
     assert(block->flags == TLSF_BLOCK_ALLOCATED);
+
+    if (block->next_phys == INVALID_BLOCK) return false;
+    if (block->kind == TLSF_BLOCK_EXTERNAL) return false;
 
     // All free nodes are already as coalesced as they could be, if our next physical neighbour is
     // free but not large enough to grow into then it is simply impossible to resize.
     tlsf_block* next_block = &tlsf_blocks(self)[block->next_phys];
+    assert(next_block->kind != TLSF_BLOCK_UNCLAIMED);
+    assert(next_block->kind != TLSF_BLOCK_EXTERNAL);
+
     if (next_block->flags & TLSF_BLOCK_ALLOCATED) return false;
     if (block->size + next_block->size < new_size) return false;
 
@@ -455,13 +445,13 @@ void tlsf_free_block(tlsf_t* self, tlsf_index block_index) {
     assert(block_index < self->metadata_capacity);
 
     tlsf_block* block = &tlsf_blocks(self)[block_index];
+    assert(block->kind != TLSF_BLOCK_UNCLAIMED);
+    assert(block->flags == TLSF_BLOCK_ALLOCATED);
+
     if (block->kind == TLSF_BLOCK_EXTERNAL) {
         tlsf_unclaim_external_block(self, block_index);
         return;
     }
-    assert(block->kind != TLSF_BLOCK_UNCLAIMED);
-    assert(block->flags == TLSF_BLOCK_ALLOCATED);
-
     if (block->prev_phys != INVALID_BLOCK && is_block_free(self, block->prev_phys)) {
         const tlsf_block prev_block = tlsf_blocks(self)[block->prev_phys];
         block->ptr = prev_block.ptr;
@@ -469,7 +459,6 @@ void tlsf_free_block(tlsf_t* self, tlsf_index block_index) {
         remove_free_block(self, block->prev_phys);
         block->prev_phys = prev_block.prev_phys;
     }
-
     if (block->next_phys != INVALID_BLOCK && is_block_free(self, block->next_phys)) {
         const tlsf_block next_block = tlsf_blocks(self)[block->next_phys];
         block->size += next_block.size;

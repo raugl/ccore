@@ -12,11 +12,13 @@
 #pragma once
 #include "common.h"
 
-#define INVALID_BLOCK   0
-#define MIN_BLOCK_SIZE  256
-#define BLOCK_ALIGNMENT 256
-#define TLSF_BIN_COUNT  336
-#define TLSF_INDEX_MAX  ((1u << bit_sizeof(tlsf_index)) - 1)
+#define INVALID_BLOCK      0
+#define MIN_BLOCK_SIZE     256
+#define BLOCK_ALIGNMENT    256
+#define TLSF_TOP_LEVELS    21
+#define TLSF_BOTTOM_LEVELS 16
+#define TLSF_BIN_COUNT     (TLSF_TOP_LEVELS * TLSF_BOTTOM_LEVELS - 1)
+#define TLSF_INDEX_MAX     ((1u << bit_sizeof(tlsf_index)) - 1)
 
 typedef enum PACKED tlsf_block_kind {
     TLSF_BLOCK_UNCLAIMED = 0, // Metadata slot is available; no backing memory is associated with it.
@@ -37,9 +39,16 @@ typedef struct tlsf_block {
     u32              size;
     tlsf_block_kind  kind;
     tlsf_block_flags flags;
-    tlsf_index       next_chunk;
+    union {                      // Tagged by flags & TLSF_BLOCK_HEAD, both 0/INVALID_INDEX when flags & TLSF_BLOCK_ALLOCATED
+        u16          bin_index;  // Index to the bin's freelist in which this *free* block recedes
+        tlsf_index   prev_free;  // The link to the previous neighbour when inside a freelist
+    };
+    union {                      // Tagged by flags & TLSF_BLOCK_ALLOCATED
+        tlsf_index   next_free;  // The link to the next neighbour when inside a freelist, when not allocated
+        tlsf_index   prev_chunk; // The link to the previous chunk inside a arena, when allocated
+    };
     tlsf_index       prev_phys, next_phys;
-    tlsf_index       prev_free, next_free;
+    // u16 _padding;
 } tlsf_block;
 
 typedef struct tlsf_t {
@@ -50,7 +59,7 @@ typedef struct tlsf_t {
     u32 unclaimed_blocks;
     f32 min_utilization;
     u32 top_bins;
-    u16 bottom_bins[21];
+    u16 bottom_bins[TLSF_TOP_LEVELS];
     u32 next_region_size;
     u32 backing_regions_len;
     u8* backing_regions[32];
@@ -79,15 +88,15 @@ typedef struct tlsf_storage_report_full {
 } tlsf_storage_report_full;
 
 // TODO: Add some function to manually request shrinking/freeing of the backing regions.
-bool tlsf_init(tlsf_t* self, usize max_allocations, usize backing_capacity, f32 min_utilization);
-bool tlsf_insert_backing_region(tlsf_t* self, void* buffer, usize size);
+bool tlsf_init(tlsf_t* self, usize max_allocations, usize initial_capacity, f32 min_utilization);
+void tlsf_insert_fixed_backing_region(tlsf_t* self, void* buffer, usize size);
 bool tlsf_destroy(tlsf_t* self, bool log_leaks);
 
-tlsf_storage_report tlsf_get_storage_report(tlsf_t self);
-tlsf_storage_report_full tlsf_get_storage_report_full(tlsf_t self);
+tlsf_storage_report tlsf_get_storage_report(const tlsf_t* self);
+tlsf_storage_report_full tlsf_get_storage_report_full(const tlsf_t* self);
+usize tlsf_get_policy_suggested_chunk_size(const tlsf_t* self, usize min_size, usize desired_size);
 tlsf_index tlsf_claim_external_block(tlsf_t* self, void* buffer, usize size);
 void tlsf_unclaim_external_block(tlsf_t* self, tlsf_index block_index);
-usize tlsf_get_policy_suggested_chunk_size(const tlsf_t* self, usize min_size, usize desired_size);
 
 bool tlsf_alloc_block(tlsf_t* self, u32 size, tlsf_allocation* allocation);
 bool tlsf_resize_block(tlsf_t* self, tlsf_index block_index, u32 new_size);
@@ -103,11 +112,11 @@ void tlsf_free_block(tlsf_t* self, tlsf_index block_index);
 #define tlsf_bin_heads(self)                                                                        \
     ((tlsf_index*)(self)->metadata_buffer)
 
-#define tlsf_block_pool(self)                                                                       \
+#define tlsf_unclaimed_pool(self)                                                                   \
     ((tlsf_index*)((self)->metadata_buffer + sizeof(tlsf_index) * TLSF_BIN_COUNT))
 
 #define tlsf_blocks(self)                                                                           \
-    ((tlsf_block*)align_forward_ptr(tlsf_block_pool(self) + (self)->metadata_capacity, alignof(tlsf_block)))
+    ((tlsf_block*)align_forward_ptr(tlsf_unclaimed_pool(self) + (self)->metadata_capacity, alignof(tlsf_block)))
 
 #define tlsf_metadata_buffer_size(max_allocations)                                                  \
     (align_forward(sizeof(tlsf_index) * (TLSF_BIN_COUNT + (max_allocations)), alignof(tlsf_block)) + sizeof(tlsf_block) * (max_allocations))
