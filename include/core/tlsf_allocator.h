@@ -10,7 +10,7 @@
 // call stack ever again.
 
 #pragma once
-#include <core/common.h>
+#include "common.h"
 
 #define INVALID_BLOCK   0
 #define MIN_BLOCK_SIZE  256
@@ -19,17 +19,15 @@
 #define TLSF_INDEX_MAX  ((1u << bit_sizeof(tlsf_index)) - 1)
 
 typedef enum PACKED tlsf_block_kind {
-    TLSF_BLOCK_SPARE    = 0, // The metadata block is 'free' inside the block pool, doesn't own any memory
-    TLSF_BLOCK_NORMAL   = 1, // The default.
-    TLSF_BLOCK_FIXED    = 2, // The block works as usual, it just comes from a user managed buffer and shall not be freed.
-    TLSF_BLOCK_EXTERNAL = 3, // The block represents a buffer managed externally, it should not be split, coalesced, or freed.
-                             // It's used by the arena to store fixed buffer chunks the same way as tlsf chunks.
+    TLSF_BLOCK_UNCLAIMED = 0, // Metadata slot is available; no backing memory is associated with it.
+    TLSF_BLOCK_MANAGED   = 1, // Backing memory is owned by TLSF and managed normally.
+    TLSF_BLOCK_FIXED     = 2, // Backing memory is caller-owned; TLSF may manage the block but must not free it.
+    TLSF_BLOCK_EXTERNAL  = 3, // Represents caller-managed memory that TLSF cannot split, coalesce, or free.
 } tlsf_block_kind;
 
 typedef enum PACKED tlsf_block_flags {
-    TLSF_BLOCK_HEAD      = 1, // The block is a the head of a bin's free list.
-    TLSF_BLOCK_ALLOCATED = 2, // The block is currently allocated and its buffer is handed over to the arena.
-    TLSF_BLOCK_CLAIMED   = 4, // The block is currently allocated and its buffer is handed over to the arena.
+    TLSF_BLOCK_HEAD      = 1, // Block is the first entry in its free-list bin.
+    TLSF_BLOCK_ALLOCATED = 2, // Block's backing memory is currently allocated to the caller.
 } tlsf_block_flags;
 
 typedef u16 tlsf_index;
@@ -49,7 +47,7 @@ typedef struct tlsf_t {
     u64 backing_size;
     u8* metadata_buffer;
     u32 metadata_capacity;
-    u32 block_pool_len;
+    u32 unclaimed_blocks;
     f32 min_utilization;
     u32 top_bins;
     u16 bottom_bins[21];
@@ -77,7 +75,7 @@ typedef struct tlsf_storage_report_bin {
 } tlsf_storage_report_bin;
 
 typedef struct tlsf_storage_report_full {
-    tlsf_storage_report_bin free_bins[320];
+    tlsf_storage_report_bin free_bins[TLSF_BIN_COUNT];
 } tlsf_storage_report_full;
 
 // TODO: Add some function to manually request shrinking/freeing of the backing regions.
@@ -112,4 +110,4 @@ void tlsf_free_block(tlsf_t* self, tlsf_index block_index);
     ((tlsf_block*)align_forward_ptr(tlsf_block_pool(self) + (self)->metadata_capacity, alignof(tlsf_block)))
 
 #define tlsf_metadata_buffer_size(max_allocations)                                                  \
-    (align_forward(sizeof(tlsf_index) * (TLSF_BIN_COUNT + (max_allocations)), alignof(tlsf_block)) + sizeof(tlsf_block) + (max_allocations))
+    (align_forward(sizeof(tlsf_index) * (TLSF_BIN_COUNT + (max_allocations)), alignof(tlsf_block)) + sizeof(tlsf_block) * (max_allocations))
