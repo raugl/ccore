@@ -12,13 +12,15 @@
 #pragma once
 #include "common.h"
 
-#define INVALID_BLOCK      0
-#define MIN_BLOCK_SIZE     256
-#define BLOCK_ALIGNMENT    256
-#define TLSF_TOP_LEVELS    21
-#define TLSF_BOTTOM_LEVELS 16
-#define TLSF_BIN_COUNT     (TLSF_TOP_LEVELS * TLSF_BOTTOM_LEVELS - 1)
-#define TLSF_INDEX_MAX     ((1u << bit_sizeof(tlsf_index)) - 1)
+#define TLSF_NIL_INDEX       0
+#define TLSF_INDEX_MAX       ((1u << bit_sizeof(tlsf_index)) - 1)
+
+#define TLSF_TOP_LEVELS      21
+#define TLSF_BOTTOM_LEVELS   16
+#define TLSF_BIN_COUNT       (TLSF_TOP_LEVELS * TLSF_BOTTOM_LEVELS - 1)
+
+#define TLSF_MIN_BLOCK_SIZE  256
+#define TLSF_BLOCK_ALIGNMENT 256
 
 typedef enum PACKED tlsf_block_kind {
     TLSF_BLOCK_UNCLAIMED = 0, // Metadata slot is available; no backing memory is associated with it.
@@ -94,7 +96,7 @@ bool tlsf_destroy(tlsf_t* self, bool log_leaks);
 
 tlsf_storage_report tlsf_get_storage_report(const tlsf_t* self);
 tlsf_storage_report_full tlsf_get_storage_report_full(const tlsf_t* self);
-usize tlsf_get_policy_suggested_chunk_size(const tlsf_t* self, usize min_size, usize desired_size);
+u32 tlsf_get_policy_suggested_chunk_size(const tlsf_t* self, usize min_size, usize desired_size);
 tlsf_index tlsf_claim_external_block(tlsf_t* self, void* buffer, usize size);
 void tlsf_unclaim_external_block(tlsf_t* self, tlsf_index block_index);
 

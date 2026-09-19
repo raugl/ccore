@@ -1,27 +1,21 @@
 #pragma once
 #include "common.h"
 
-// TODO
-#define DEBUG_ALLOCATOR 1
-
 typedef u16 tlsf_index;
 
 typedef struct arena_t {
     u8*        _append_ptr;
     u32        _avail_size;
-    tlsf_index _tail_block;
-    union {
-        tlsf_index _head_block;
-        // TODO: i've got 2 space bytes, and thats before trying to compact the bools into a bit
-        // field. I should use them to promote _initial_capacity to a u32 and not loose so much
-        // capacity on clear.
-        u16 _initial_capacity;
+    union {                       // tagged by _tail_chunk == TLSF_NIL_INDEX
+        u32    _initial_capacity; // the initial chunk size, when there is no tail
+        u32    _prev_alloc_size;  // the useful size of the previous allocation i.e. prefix + size + sufix but with no align padding, only used in DEBUG_ALLOCATOR mode
     };
+    tlsf_index _tail_chunk;
     u16        _tail_live_allocs;
     bool       _fail_alloc;
     bool       _fail_resize;
     bool       _fail_everything;
-    bool       _warn_chunk_growth;
+    bool       _warn_spillover;
 } arena_t;
 
 typedef struct arena_replacement_info {
@@ -35,8 +29,8 @@ arena_t arena_init(void);
 arena_t arena_init_fixed(void* buffer, usize size, bool silence_spillover);
 arena_t arena_init_capacity(usize capacity, bool silence_spillover);
 void arena_destroy(arena_t* self);
-void arena_clear(arena_t* self);
 
+void arena_clear(arena_t* self);
 bool arena_begin_replace_raw(arena_t* self, void* old_ptr, usize old_size, usize new_size, usize align, arena_replace_info* out_info);
 void arena_commit_replace(arena_t* self, arena_replace_info info);
 

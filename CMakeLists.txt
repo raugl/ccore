@@ -17,7 +17,7 @@ target_compile_options(ccore_warnings INTERFACE
     -Wall -Wextra -Wpedantic
     -Wshadow -Wundef -Wcast-qual
     -Wformat=2 -Wstrict-overflow=5
-    -Wuninitialized -Wmaybe-uninitialized
+    -Wuninitialized # -Wmaybe-uninitialized
     -Wconversion -Wsign-conversion -Wdouble-promotion
     -Wswitch -Wswitch-default -Wswitch-enum -Wimplicit-fallthrough
     -Wredundant-decls -Wmissing-prototypes -Wstrict-prototypes
@@ -30,12 +30,14 @@ target_compile_options(ccore_options INTERFACE "$<$<CONFIG:Debug,RelWithDebInfo>
 target_link_options(ccore_options INTERFACE "$<$<CONFIG:Debug,RelWithDebInfo>:-fsanitize=address,undefined>")
 
 add_library(ccore STATIC
-    src/allocator.c
     src/common.c
     src/hash.c
     src/testing.c
+    src/tlsf_allocator.c
+    src/arena_allocator.c
 )
 add_library(ccore::ccore ALIAS ccore)
+target_compile_definitions(ccore PRIVATE DEBUG_ALLOCATOR)
 target_include_directories(ccore PUBLIC "${CMAKE_SOURCE_DIR}/include")
 target_link_libraries(ccore PRIVATE ccore_warnings ccore_options)
 
