@@ -113,6 +113,8 @@ static bool map_iterator_next(map_iterator* self) {
 #define map_values(map, K, V)                                                                       \
     ((V*)align_forward_ptr(map_keys((map), K) + (map)->capacity, alignof(V)))
 
+#define map_buffer_size(capacity, K, V)                                                             \
+    (capacity * (sizeof(map_metadata) + sizeof(K) + sizeof(V) + 2) - 2)
 
 FORCE_INLINE u8 take_hash_fingerprint(u64 hash) {
     return (u8)(hash >> (64 - 7));
@@ -178,11 +180,11 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
         const u32 mask = self.capacity - 1;                                                         \
         const u8 fingerprint = take_hash_fingerprint(hash);                                         \
                                                                                                     \
-        K* keys = map_keys(self, K);                                                                \
+        K* keys = map_keys(&self, K);                                                               \
         u32 index = (u32)hash & mask;                                                               \
-        map_metadata* metas = self->_data;                                                          \
+        map_metadata* metas = self._data;                                                           \
                                                                                                     \
-        for (u32 limit = 0; limit < self->capacity; ++limit) {                                      \
+        for (u32 limit = 0; limit < self.capacity; ++limit) {                                       \
             if (metas[index] == MAP_FREE_SLOT) {                                                    \
                 return MAP_INVALID_INDEX;                                                           \
             }                                                                                       \
@@ -199,12 +201,12 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
         const u32 mask = self.capacity - 1;                                                         \
         const u8 fingerprint = take_hash_fingerprint(hash);                                         \
                                                                                                     \
-        K* keys = map_keys(self, K);                                                                \
+        K* keys = map_keys(&self, K);                                                               \
         u32 index = (u32)hash & mask;                                                               \
-        map_metadata* metas = self->_data;                                                          \
+        map_metadata* metas = self._data;                                                           \
         u32 tombstone_index = MAP_INVALID_INDEX;                                                    \
                                                                                                     \
-        for (u32 limit = 0; limit < self->capacity; ++limit) {                                      \
+        for (u32 limit = 0; limit < self.capacity; ++limit) {                                       \
             if (metas[index] == MAP_FREE_SLOT) {                                                    \
                 return (tombstone_index != MAP_INVALID_INDEX) ? tombstone_index : index;            \
             }                                                                                       \
@@ -228,9 +230,11 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
         new_capacity = max_usize(new_capacity, next_pow2_u64(self->capacity));                      \
         if (new_capacity > UINT32_MAX) return false;                                                \
                                                                                                     \
+        const usize new_size = map_buffer_size(new_capacity, K, V);                                 \
+        const usize old_size = map_buffer_size(self->capacity, K, V);                               \
+                                                                                                    \
         arena_relocate_info info;                                                                   \
-        const u64 new_size = new_capacity * (sizeof(map_metadata) + sizeof(k) + sizeof(V) + 2) - 2; \
-        if (!arena_begin_remap(self->_arena, self->_data, self->capacity, new_size, &info)) {       \
+        if (!arena_begin_remap(self->_arena, self->_data, old_size, new_size, &info)) {             \
             return false;                                                                           \
         }                                                                                           \
         memset(info.ptr, MAP_FREE_SLOT, new_capacity * sizeof(map_metadata));                       \
@@ -242,16 +246,16 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
             ._available = (u32)(new_capacity * LOAD_FACTOR / 100),                                  \
         };                                                                                          \
         for (u32 i = 0; i < new_capacity; ++i) {                                                    \
-            if (!(metas[i] & MAP_CLAIMED_MASK)) continue;                                           \
+            if (!(self->_data[i] & MAP_CLAIMED_MASK)) continue;                                     \
             assert(new_map._available > 0);                                                         \
-                                                                                                    \
-            K* keys = map_keys(&new_map, K);                                                        \
-            V* vals = map_values(&new_map, K, V);                                                   \
-            map_metadata* metas = new_map._data;                                                    \
                                                                                                     \
             const u64 hash = hash_proc(&map_keys(self, K)[i], sizeof(K));                           \
             const u32 mask = new_map.capacity - 1;                                                  \
             const u8 fingerprint = take_hash_fingerprint(hash);                                     \
+                                                                                                    \
+            K* keys = map_keys(&new_map, K);                                                        \
+            V* vals = map_values(&new_map, K, V);                                                   \
+            map_metadata* metas = new_map._data;                                                    \
                                                                                                     \
             u32 index = (u32)hash & mask;                                                           \
             while (metas[index] != MAP_FREE_SLOT) {                                                 \
@@ -307,7 +311,7 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
                 index = (index + 1) & mask;                                                         \
             }                                                                                       \
                                                                                                     \
-            if (index < 1) {                                                                        \
+            if (index < curr) {                                                                     \
                 assert(metas[index] == MAP_FREE_SLOT);                                              \
                 assert(!(metas[curr] & MAP_FINGERPRINT_MASK));                                      \
                                                                                                     \
@@ -343,7 +347,7 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
     void Self##_clear(Self* self) {                                                                 \
         assert(self != NULL);                                                                       \
         self->len = 0;                                                                              \
-        self->_available = (self->capacity * LOAD_FACTOR / 100),                                    \
+        self->_available = (self->capacity * LOAD_FACTOR / 100);                                    \
                                                                                                     \
         memset_destroyed(map_keys(self, K), self->capacity * sizeof(K));                            \
         memset_destroyed(map_values(self, K, V), self->capacity * sizeof(V));                       \
@@ -359,7 +363,7 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
         const u32 index = Self##_probe_index_for_get(self, key);                                    \
         if (index == MAP_INVALID_INDEX) return false;                                               \
                                                                                                     \
-        *value = &map_values(self, K, V)[index];                                                    \
+        *value = &map_values(&self, K, V)[index];                                                   \
         return true;                                                                                \
     }                                                                                               \
                                                                                                     \
@@ -375,8 +379,6 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
     bool Self##_fetch_insert(Self* self, K key, V** value, bool* existed) {                         \
         assert(self != NULL);                                                                       \
         assert(value != NULL);                                                                      \
-        K* keys = map_keys(self, K);                                                                \
-        V* vals = map_values(self, K, V);                                                           \
                                                                                                     \
         if (!Self##_reserve_spare(self, 1)) {                                                       \
             /* If allocation fails, try to do the lookup anyway. If we find an existing item,
@@ -384,16 +386,22 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
             const u32 index = Self##_probe_index_for_get(*self, key);                               \
             if (index == MAP_INVALID_INDEX) return false;                                           \
                                                                                                     \
-            *value = &vals[index];                                                                  \
+            *value = &map_values(self, K, V)[index];                                                \
             if (existed != NULL) *existed = true;                                                   \
             return true;                                                                            \
         }                                                                                           \
+        K* keys = map_keys(self, K);                                                                \
+        V* vals = map_values(self, K, V);                                                           \
+        map_metadata* metas = self->_data;                                                          \
+                                                                                                    \
         const u32 index = Self##_probe_index_for_insert(*self, key);                                \
+        const u64 hash = hash_proc(&key, sizeof(K));                                                \
+        const u8 fingerprint = take_hash_fingerprint(hash);                                         \
         if (index == MAP_INVALID_INDEX) return false;                                               \
                                                                                                     \
         if (metas[index] != MAP_TOMBSTONE_SLOT) {                                                   \
             *value = &vals[index];                                                                  \
-            if (existed != NULL) existed = true;                                                    \
+            if (existed != NULL) *existed = true;                                                   \
         } else {                                                                                    \
             metas[index] = MAP_CLAIMED_MASK | fingerprint;                                          \
             self->_available--;                                                                     \
@@ -401,7 +409,7 @@ FORCE_INLINE bool equal_ptr(const rawptr* a, const rawptr* b, u32 size) {
                                                                                                     \
             keys[index] = key;                                                                      \
             *value = &vals[index];                                                                  \
-            if (existed != NULL) existed = false;                                                   \
+            if (existed != NULL) *existed = false;                                                  \
             memset_undefined(vals + index, sizeof(V));                                              \
         }                                                                                           \
         return true;                                                                                \
