@@ -138,7 +138,7 @@ static cleanup_chunks_result cleanup_chunks(arena_t self) {
     cleanup_chunks_result result = {0};
 
     for (tlsf_index chunk_index = self._tail_chunk; chunk_index != TLSF_NIL_INDEX;) {
-        const tlsf_block chunk = tlsf_blocks(tlsf)[self._tail_chunk];
+        const tlsf_block chunk = tlsf_blocks(tlsf)[chunk_index];
         assert(chunk_index < tlsf->metadata_capacity);
         assert(chunk.flags == TLSF_BLOCK_ALLOCATED);
 
@@ -150,24 +150,23 @@ static cleanup_chunks_result cleanup_chunks(arena_t self) {
             result.fixed_buffer = chunk.ptr;
             result.fixed_size = chunk.size;
             found_fixed = true;
+        }
 
 #ifdef DEBUG_ALLOCATOR
-            // This exists becaues the header is aligned to 4 bytes, but the fixed buffer could have
-            // any alignment. The header is always inserted at its correct alignment, so to retrieve
-            // the first header inside a chunk, i just need to align forward the chunk's pointer. All
-            // chunks will have an activie initial header, because otherwise replaced would have just
-            // freed them.
-            arena_debug_header* header = align_forward_ptr(chunk.ptr, alignof(arena_debug_header));
+        // This exists becaues the header is aligned to 4 bytes, but the fixed buffer could have any
+        // alignment. The header is always inserted at its correct alignment, so to retrieve the
+        // first header inside a chunk, i just need to align forward the chunk's pointer. All chunks
+        // will have an activie initial header, because otherwise replaced would have just freed them.
+        arena_debug_header* header = align_forward_ptr(chunk.ptr, alignof(arena_debug_header));
 
-            while (header->next_offset != TLSF_NIL_INDEX) {
-                assert_canaries(header);
-                header += header->next_offset;
-            }
-#endif
-            tlsf_free_block(tlsf, chunk_index);
-            result.total_size += chunk.size;
-            chunk_index = chunk.prev_chunk;
+        while (header->next_offset != TLSF_NIL_INDEX) {
+            assert_canaries(header);
+            header += header->next_offset;
         }
+#endif
+        tlsf_free_block(tlsf, chunk_index);
+        result.total_size += chunk.size;
+        chunk_index = chunk.prev_chunk;
     }
     return result;
 }
@@ -239,13 +238,13 @@ void* arena_alloc_raw(arena_t* self, usize size, usize align) {
 
 #ifdef DEBUG_ALLOCATOR
     arena_debug_header* curr_header = (void*)(new_ptr - DEBUG_PREFIX_SIZE);
-    arena_debug_header* prev_header = (void*)(self->_append_ptr - self->_prev_alloc_size);
+    arena_debug_header* prev_header = (void*)(self->_append_ptr - self->_prev_alloc_extent);
 
-    if (self->_prev_alloc_size != 0) {
+    if (self->_prev_alloc_extent != 0) {
         prev_header->next_offset = (u32)(curr_header - prev_header);
     }
     curr_header->size = (u32)size;
-    self->_prev_alloc_size = (u32)(DEBUG_PREFIX_SIZE + size + DEBUG_CANARY_SIZE);
+    self->_prev_alloc_extent = (u32)(DEBUG_PREFIX_SIZE + size + DEBUG_CANARY_SIZE);
 #endif
 
     self->_avail_size -= size_bump;
@@ -330,10 +329,11 @@ bool arena_resize_raw(arena_t* self, void* old_ptr, usize old_size, usize new_si
 
     if (size_diff < 0) {
 #ifdef DEBUG_ALLOCATOR
-        header->size += size_diff;
+        header->size = (u32)new_size;
+        self->_prev_alloc_extent = (u32)(DEBUG_PREFIX_SIZE + new_size + DEBUG_CANARY_SIZE);
         memset_undefined((u8*)old_ptr + new_size, DEBUG_CANARY_SIZE);
 #endif
-        memset_destroyed((u8*)old_ptr + new_size + DEBUG_CANARY_SIZE, old_size - new_size - DEBUG_CANARY_SIZE);
+        memset_destroyed((u8*)old_ptr + new_size + DEBUG_CANARY_SIZE, old_size - new_size);
     }
     if (!is_last) return size_diff <= 0;
 
@@ -349,7 +349,8 @@ bool arena_resize_raw(arena_t* self, void* old_ptr, usize old_size, usize new_si
     }
 
 #ifdef DEBUG_ALLOCATOR
-    header->size += size_diff;
+    header->size = (u32)new_size;
+    self->_prev_alloc_extent = (u32)(DEBUG_PREFIX_SIZE + new_size + DEBUG_CANARY_SIZE);
 #endif
     self->_append_ptr += size_diff;
     self->_avail_size -= size_diff;
@@ -357,38 +358,16 @@ bool arena_resize_raw(arena_t* self, void* old_ptr, usize old_size, usize new_si
 }
 
 void* arena_realloc_raw(arena_t* self, void* old_ptr, usize old_size, usize new_size, usize align) {
-    assert(self != NULL);
-    assert(old_size <= UINT32_MAX);
-    assert(new_size <= UINT32_MAX);
-    assert(align <= TLSF_BLOCK_ALIGNMENT);
-    assert(is_pow2(align));
-
-    if (old_ptr == NULL || old_size == 0) {
-        assert(old_ptr == NULL && old_size == 0);
-        return arena_alloc_raw(self, new_size, align);
-    }
-    if (new_size == 0) {
-        assert(arena_resize_raw(self, old_ptr, old_size, 0));
-        return NULL;
-    }
-    if (arena_resize_raw(self, old_ptr, old_size, new_size)) {
-        return old_ptr;
-    }
-    assert(new_size > old_size);
-
-    arena_replace_info info;
-    if (arena_begin_replace_raw(self, old_ptr, old_size, new_size, align, &info)) {
-        memcpy(info.ptr, old_ptr, old_size);
-        arena_commit_replace(self, info);
+    arena_relocate_info info;
+    if (arena_begin_realloc_raw(self, old_ptr, old_size, new_size, align, &info)) {
+        memcpy(info.ptr, old_ptr, min_usize(old_size, new_size));
+        arena_end_relocate(self, info);
         return info.ptr;
     }
     return NULL;
 }
 
-// TODO: add more asserts, basically copy everything from realloc as its the same api in practice
-// TODO: also fix the deque, its not using this properly. actually rethink the whole usage of
-// replace, i think i might want to turn it into some customizable realloc and get rid of resize
-bool arena_begin_replace_raw(arena_t* self, void* old_ptr, usize old_size, usize new_size, usize align, arena_replace_info* out_info) {
+bool arena_begin_realloc_raw(arena_t* self, void* old_ptr, usize old_size, usize new_size, usize align, arena_relocate_info* out_info) {
     assert(self != NULL);
     assert(out_info != NULL);
     assert(old_size <= UINT32_MAX);
@@ -396,28 +375,56 @@ bool arena_begin_replace_raw(arena_t* self, void* old_ptr, usize old_size, usize
     assert(align <= TLSF_BLOCK_ALIGNMENT);
     assert(is_pow2(align));
 
-    bool is_last = self->_append_ptr == (u8*)old_ptr + old_size + DEBUG_CANARY_SIZE;
-
-    *out_info = (arena_replace_info) {
-        .size = (u32)new_size,
+    *out_info = (arena_relocate_info) {
+        .ptr        = NULL,
+        .size       = (u32)new_size,
         ._prev_tail = self->_tail_chunk,
-        ._free_prev = has_non_fixed_tail_chunk(*self) && (self->_tail_live_allocs <= 1) && is_last,
     };
+    if (old_ptr != NULL || old_size != 0) {
+        assert(old_ptr != NULL && old_size != 0);
+
+        if (arena_resize_raw(self, old_ptr, old_size, new_size)) {
+            if (new_size > 0) out_info->ptr = old_ptr;
+            return true;
+        }
+    }
+    assert(self->_fail_resize || self->_fail_everything || new_size > old_size);
+    return arena_begin_remap_raw(self, old_ptr, old_size, new_size, align, (void*)out_info);
+}
+
+bool arena_begin_remap_raw(arena_t* self, void* old_ptr, usize old_size, usize new_size, usize align, arena_relocate_info* out_info) {
+    assert(self != NULL);
+    assert(out_info != NULL);
+    assert(old_size <= UINT32_MAX);
+    assert(new_size <= UINT32_MAX);
+    assert(align <= TLSF_BLOCK_ALIGNMENT);
+    assert((old_ptr == NULL) == (old_size == 0));
+    assert(is_pow2(align));
+
+    *out_info = (arena_relocate_info) {
+        .ptr        = NULL,
+        .size       = (u32)new_size,
+        ._prev_tail = self->_tail_chunk,
+    };
+    if (new_size == 0) return true;
 
     out_info->ptr = arena_alloc_raw(self, new_size, align);
     if (out_info->ptr == NULL) {
-        *out_info = (arena_replace_info) { 0 };
+        *out_info = (arena_relocate_info) { 0 };
         return false;
     }
 
-    if (self->_tail_chunk == out_info->_prev_tail) {
-        out_info->_free_prev = false;
+    if (self->_tail_chunk != out_info->_prev_tail) {
+        out_info->_free_prev = has_non_fixed_tail_chunk(*self);
+        out_info->_free_prev &= (self->_tail_live_allocs <= 1);
+        out_info->_free_prev &= (self->_append_ptr == (u8*)old_ptr + old_size + DEBUG_CANARY_SIZE);
+    } else {
         self->_tail_live_allocs--;
     }
     return true;
 }
 
-void arena_commit_replace(arena_t* self, arena_replace_info info) {
+void arena_end_relocate(arena_t* self, arena_relocate_info info) {
     assert(self != NULL);
     tlsf_t* tlsf = _ccore_global_tlsf;
 
