@@ -94,10 +94,7 @@ static void deque_copy_buffer(raw_deque* deque, u8* new_ptr, usize new_capacity,
         assert(self != NULL);                                                                       \
         if (new_capacity <= self->capacity) return true;                                            \
                                                                                                     \
-        new_capacity = (self->capacity == 0) ?                                                      \
-            sizeof(cacheline_t) / sizeof(T) :                                                       \
-            max_usize(new_capacity, self->capacity + (self->capacity >> 1));                        \
-                                                                                                    \
+        new_capacity = next_container_capacity(T, self->capacity, container_capacity);              \
         if (new_capacity > UINT32_MAX) return false;                                                \
         return Self##_reserve_exact(self, new_capacity);                                            \
     }                                                                                               \
@@ -106,20 +103,15 @@ static void deque_copy_buffer(raw_deque* deque, u8* new_ptr, usize new_capacity,
         assert(self != NULL);                                                                       \
         if (self->capacity >= new_capacity) return true;                                            \
                                                                                                     \
-        if (arena_resize(self->_arena, self->_data, self->capacity, new_capacity)) {                \
-            deque_copy_buffer((void*)self, (u8*)self->_data, new_capacity, sizeof(T));              \
-            return true;                                                                            \
+        arena_relocate_info info;                                                                   \
+        if (!arena_begin_realloc(self->_arena, self->_data, self->capacity, new_capacity, &info)) { \
+            return false;                                                                           \
         }                                                                                           \
-                                                                                                    \
-        arena_replace_info info;                                                                    \
-        if (arena_begin_replace(self->_arena, self->_data, self->capacity, new_capacity, &info)) {  \
-            deque_copy_buffer((void*)self, info.ptr, new_capacity, sizeof(T));                      \
-            arena_commit_replace(self->_arena, info);                                               \
-            self->capacity = (u32)new_capacity;                                                     \
-            self->_data = info.ptr;                                                                 \
-            return true;                                                                            \
-        }                                                                                           \
-        return false;                                                                               \
+        deque_copy_buffer((void*)self, info.ptr, new_capacity, sizeof(T));                          \
+        arena_end_relocate(self->_arena, info);                                                     \
+        self->capacity = (u32)new_capacity;                                                         \
+        self->_data = info.ptr;                                                                     \
+        return true;                                                                                \
     }                                                                                               \
                                                                                                     \
     bool Self##_reserve_spare(Self* self, usize count) {                                            \

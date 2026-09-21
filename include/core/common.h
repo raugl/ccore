@@ -111,6 +111,9 @@ POP_DIAG_IGNORE
         ccore_alignof_expr__;                                                                       \
     }))
 
+#define next_container_capacity(T, capacity, new_capacity)                                          \
+    max_usize(4, max_usize((new_capacity), max_usize((capacity) + ((capacity) >> 1), sizeof(cacheline_t) / sizeof(T))))
+
 #define memset_undefined(ptr, len) memset((ptr), 0xAA, (len))
 #define memset_destroyed(ptr, len) memset((ptr), 0xDE, (len))
 
