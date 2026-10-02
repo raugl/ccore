@@ -9,24 +9,29 @@
       "cacheVariables": { "CMAKE_C_COMPILER": "clang" }
     },
     {
-      "name": "Release",
-      "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
-    },
-    {
       "name": "Debug",
       "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
-      "name": "RelWithDebInfo",
+      "name": "DebugSanitized",
+      "inherits": "Debug",
+      "cacheVariables": { "CCORE_SANITIZE": "ON" }
+    },
+    {
+      "name": "Release",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
     {
       "name": "MinSizeRel",
       "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "MinSizeRel" }
+    },
+    {
+      "name": "RelWithDebInfo",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
     }
   ]
 }
